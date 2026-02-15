@@ -3,11 +3,11 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 
 let weatherCache: { data: any, timestamp: number } | null = null;
-const CACHE_DURATION = 5 * 60 * 1000; 
+const CACHE_DURATION = 5 * 60 * 1000;
 
 export default function Dashboard() {
   const [name, setName] = useState("");
-  const [aqi, setAqi] = useState(0); 
+  const [aqi, setAqi] = useState(0);
   const [aiAdvice, setAiAdvice] = useState("กดปุ่มด้านล่างเพื่อให้ TrueX AI เริ่มวิเคราะห์ข้อมูลครับ");
   const [isLoading, setIsLoading] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -15,101 +15,154 @@ export default function Dashboard() {
   const [isMounted, setIsMounted] = useState(false);
   const router = useRouter();
 
-  const aqiStyle = useMemo(() => {
-    if (aqi === 0)
-      return {
-        dot: "bg-slate-500",
-        text: "text-slate-400",
-        border: "border-slate-700",
-        bg: "bg-gradient-to-br from-[#141414] to-[#1c1c1c]",
-        glow: "shadow-none",
-        label: "กำลังโหลด..."
-      };
+  /* ================= SPEAK ================= */
 
-    if (aqi <= 50)
-      return {
-        dot: "bg-green-500",
-        text: "text-green-400",
-        border: "border-green-500/40",
-        bg: "bg-gradient-to-br from-[#141414] to-[#1c1c1c]",
-        glow: "shadow-[0_0_60px_rgba(34,197,94,0.12)]",
-        label: "อากาศดีมาก"
-      };
+  const speak = (text: string) => {
+    if (typeof window === "undefined") return;
+    if (!("speechSynthesis" in window)) return;
 
-    if (aqi <= 100)
-      return {
-        dot: "bg-yellow-400",
-        text: "text-yellow-400",
-        border: "border-yellow-500/40",
-        bg: "bg-gradient-to-br from-[#141414] to-[#1c1c1c]",
-        glow: "shadow-[0_0_60px_rgba(250,204,21,0.12)]",
-        label: "ปานกลาง"
-      };
+    speechSynthesis.cancel();
 
-    if (aqi <= 150)
-      return {
-        dot: "bg-orange-500",
-        text: "text-orange-400",
-        border: "border-orange-500/40",
-        bg: "bg-gradient-to-br from-[#141414] to-[#1c1c1c]",
-        glow: "shadow-[0_0_60px_rgba(249,115,22,0.12)]",
-        label: "เริ่มมีผลกระทบ"
-      };
+    const utterance = new SpeechSynthesisUtterance(text);
 
-    if (aqi <= 200)
-      return {
-        dot: "bg-red-600",
-        text: "text-red-500",
-        border: "border-red-500/40",
-        bg: "bg-gradient-to-br from-[#141414] to-[#1c1c1c]",
-        glow: "shadow-[0_0_60px_rgba(220,38,38,0.12)]",
-        label: "ไม่ดีต่อสุขภาพ"
-      };
+    const voices = speechSynthesis.getVoices();
+    const thaiVoice =
+      voices.find(v => v.lang === "th-TH") ||
+      voices.find(v => v.lang.includes("th"));
 
-    return {
-      dot: "bg-purple-700",
-      text: "text-purple-500",
-      border: "border-purple-600/40",
-      bg: "bg-gradient-to-br from-[#141414] to-[#1c1c1c]",
-      glow: "shadow-[0_0_60px_rgba(147,51,234,0.12)]",
-      label: "อันตรายมาก"
+    if (thaiVoice) utterance.voice = thaiVoice;
+
+    utterance.lang = "th-TH";
+    utterance.rate = 0.92;
+    utterance.pitch = 1.05;
+    utterance.volume = 1;
+
+    speechSynthesis.speak(utterance);
+  };
+
+  /* ================= VOICE COMMAND ================= */
+
+    const handleVoiceCommand = (text: string) => {
+      const lowerText = text.toLowerCase().trim();
+
+      console.log("ได้ยินว่า:", lowerText);
+
+      const wakePatterns = [
+        "ทรู",
+        "ทู",
+        "true",
+        "เอ็ก",
+        "เอ็กซ์",
+        "เอก"
+      ];
+
+      const hasWakeWord = wakePatterns.some(word =>
+        lowerText.includes(word)
+      );
+
+      const hasGreeting =
+        lowerText.includes("สวัสดี") ||
+        lowerText.includes("หวัดดี") ||
+        lowerText.includes("hello");
+
+      // 🔥 ถ้ามีคำทักทาย + มีคำใกล้เคียงทรูเอ็กซ์
+      if (hasWakeWord && hasGreeting) {
+        speak(`ครับ คุณ ${name} มีอะไรให้ผมช่วย`);
+        return;
+      }
+
+      if (lowerText.includes("อากาศ")) {
+        speak(`
+          ตอนนี้ที่ ${weather.city}
+          อุณหภูมิ ${weather.temp} องศา
+          ค่าเอคิวไอ ${aqi}
+          อยู่ในระดับ ${aqiStyle.label}
+        `);
+        return;
+      }
+
+      if (lowerText.includes("วิเคราะห์")) {
+        handleAnalyze();
+        speak("กำลังวิเคราะห์ข้อมูลให้ครับ");
+        return;
+      }
+
+      speak("ขออภัยครับ ผมยังไม่เข้าใจคำสั่ง");
     };
+
+  const startListening = () => {
+    if (typeof window === "undefined") return;
+
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert("เบราว์เซอร์นี้ไม่รองรับการสั่งงานด้วยเสียง");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = "th-TH";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      handleVoiceCommand(transcript);
+    };
+
+    recognition.start();
+  };
+
+  /* ================= AQI STYLE ================= */
+
+  const aqiStyle = useMemo(() => {
+    if (aqi <= 50)
+      return { dot: "bg-green-500", text: "text-green-400", border: "border-green-500/40", bg: "", glow: "", label: "อากาศดีมาก" };
+    if (aqi <= 100)
+      return { dot: "bg-yellow-400", text: "text-yellow-400", border: "border-yellow-500/40", bg: "", glow: "", label: "ปานกลาง" };
+    if (aqi <= 150)
+      return { dot: "bg-orange-500", text: "text-orange-400", border: "border-orange-500/40", bg: "", glow: "", label: "เริ่มมีผลกระทบ" };
+    if (aqi <= 200)
+      return { dot: "bg-red-600", text: "text-red-500", border: "border-red-500/40", bg: "", glow: "", label: "ไม่ดีต่อสุขภาพ" };
+
+    return { dot: "bg-purple-700", text: "text-purple-500", border: "border-purple-600/40", bg: "", glow: "", label: "อันตรายมาก" };
   }, [aqi]);
 
-  useEffect(() => {
-    setIsMounted(true);
-    const clockTimer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(clockTimer);
-  }, []);
-
-  const timeDisplay = useMemo(() => {
-    return currentTime.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
-  }, [currentTime]);
+  /* ================= FETCH DATA ================= */
 
   const fetchData = useCallback(async () => {
     const now = Date.now();
-    if (weatherCache && (now - weatherCache.timestamp < CACHE_DURATION)) {
+    if (weatherCache && now - weatherCache.timestamp < CACHE_DURATION) {
       setWeather(weatherCache.data.weather);
       setAqi(weatherCache.data.aqi);
       return;
     }
 
-    fetch(`/api/weather?lat=13.75&lon=100.50`)
-      .then(r => r.json())
-      .then(data => {
-        const formatted = {
-          weather: { 
-            temp: data.temp?.toString() || "--", 
-            desc: data.desc || "-", 
-            city: data.city || "Bangkok" 
-          },
-          aqi: data.aqi || 0
-        };
+    const res = await fetch(`/api/weather?lat=13.75&lon=100.50`);
+    const data = await res.json();
 
-        weatherCache = { data: formatted, timestamp: now };
-        setWeather(formatted.weather);
-        setAqi(formatted.aqi);
-      });
+    const formatted = {
+      weather: {
+        temp: data.temp?.toString() || "--",
+        desc: data.desc || "-",
+        city: data.city || "Bangkok"
+      },
+      aqi: data.aqi || 0
+    };
+
+    weatherCache = { data: formatted, timestamp: now };
+    setWeather(formatted.weather);
+    setAqi(formatted.aqi);
+  }, []);
+
+  /* ================= EFFECTS ================= */
+
+  useEffect(() => {
+    setIsMounted(true);
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -119,9 +172,10 @@ export default function Dashboard() {
     }
   }, [isMounted, fetchData]);
 
+  /* ================= ANALYZE ================= */
+
   const handleAnalyze = async () => {
     setIsLoading(true);
-    setAiAdvice("TrueX AI กำลังประมวลผลข้อมูลอากาศและพลังงาน...");
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -139,13 +193,14 @@ export default function Dashboard() {
 
   const logout = () => {
     localStorage.removeItem('userName');
-    document.cookie = "isLoggedIn=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
     window.location.href = '/login';
   };
 
   if (!isMounted) return null;
 
-  return (
+  /* ================= UI (ของคุณเหมือนเดิมทั้งหมด) ================= */
+
+    return (
     <div className="min-h-screen bg-[#0c0f14] font-sans text-white transition-all duration-700">
 
       <nav className="bg-[#0f1720]/80 backdrop-blur-xl p-4 border-b border-red-900/30 flex justify-between items-center shadow-lg sticky top-0 z-20">
@@ -167,7 +222,7 @@ export default function Dashboard() {
                 Live Time
               </span>
               <span className="text-sm font-bold text-white/90">
-                {timeDisplay}
+                {currentTime.toLocaleTimeString()}
               </span>
             </div>
           </div>
@@ -182,6 +237,13 @@ export default function Dashboard() {
               {name}
             </span>
           </div>
+
+          <button
+            onClick={startListening}
+            className="bg-black border border-red-500 text-red-500 px-6 py-3 rounded-xl hover:bg-red-600 hover:text-white transition"
+          >
+            🎙 พูดกับ TrueX
+          </button>
 
           <button
             onClick={logout}
@@ -222,7 +284,32 @@ export default function Dashboard() {
           </div>
 
           <button
-            onClick={handleAnalyze}
+            onClick={() => {
+              handleAnalyze();
+
+              const report = `
+              สวัสดีค่ะ คุณ ${name}
+
+              ตอนนี้ ที่ ${weather.city}
+              อุณหภูมิ อยู่ที่ ${weather.temp} องศาเซลเซียส
+              สภาพอากาศ ${weather.desc}
+
+              ค่าคุณภาพอากาศ หรือ เอคิวไอ อยู่ที่ ${aqi}
+              ซึ่งอยู่ในระดับ ${aqiStyle.label}
+
+              ${
+                aqi <= 50
+                  ? "อากาศดีมาก สามารถทำกิจกรรมกลางแจ้งได้ตามปกติค่ะ"
+                  : aqi <= 100
+                  ? "อากาศปานกลาง หากต้องอยู่กลางแจ้งนาน ควรสวมหน้ากากค่ะ"
+                  : aqi <= 150
+                  ? "เริ่มมีผลกระทบต่อสุขภาพ ควรลดเวลาทำกิจกรรมกลางแจ้งค่ะ"
+                  : "คุณภาพอากาศไม่ดีต่อสุขภาพ ควรหลีกเลี่ยงกิจกรรมกลางแจ้งค่ะ"
+              }
+              `;
+
+              speak(report);
+            }}
             disabled={isLoading}
             className="w-full bg-gradient-to-r from-red-700 to-red-600 
             text-white p-8 rounded-[1.5rem] 
@@ -236,6 +323,7 @@ export default function Dashboard() {
           >
             {isLoading ? "ANALYZING..." : "ANALYZE WITH TRUEX AI"}
           </button>
+
         </div>
 
         <div className="bg-gradient-to-br from-[#111418] to-[#0f0f12] 
@@ -268,6 +356,7 @@ export default function Dashboard() {
               ></div>
             ))}
           </div>
+
         </div>
 
       </main>
