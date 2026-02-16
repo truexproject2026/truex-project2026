@@ -1,7 +1,6 @@
 'use client';
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-
 let weatherCache: { data: any, timestamp: number } | null = null;
 const CACHE_DURATION = 5 * 60 * 1000;
 
@@ -14,6 +13,8 @@ export default function Dashboard() {
   const [weather, setWeather] = useState({ temp: "--", desc: "Loading...", city: "Searching..." });
   const [isMounted, setIsMounted] = useState(false);
   const router = useRouter();
+  const [events, setEvents] = useState<any[]>([]);
+  const [notifiedEvents, setNotifiedEvents] = useState<string[]>([]);
 
   /* ================= SPEAK ================= */
 
@@ -22,9 +23,7 @@ export default function Dashboard() {
     if (!("speechSynthesis" in window)) return;
 
     speechSynthesis.cancel();
-
     const utterance = new SpeechSynthesisUtterance(text);
-
     const voices = speechSynthesis.getVoices();
     const thaiVoice =
       voices.find(v => v.lang === "th-TH") ||
@@ -80,12 +79,47 @@ export default function Dashboard() {
         `);
         return;
       }
-
+    // ===== ถามว่าวันนี้มีนัดอะไร =====
+      if (
+          lowerText.includes("มีนัด") ||
+          lowerText.includes("นัดอะไร") ||
+          lowerText.includes("นัดบ้าง")
+        ) {
+           handleAskEvents();
+            return;
+    }
       if (lowerText.includes("วิเคราะห์")) {
         handleAnalyze();
         speak("กำลังวิเคราะห์ข้อมูลให้ครับ");
         return;
       }
+      // ===== เพิ่มนัดด้วยเสียง =====
+    if (
+      lowerText.includes("นัด") ||
+      lowerText.includes("เพิ่มนัด") ||
+      lowerText.includes("จอง")
+    ) {
+      handleCreateEventFromVoiceNatural(lowerText);
+      return;
+    }
+
+    // ===== ยกเลิกนัด =====
+    if (
+      lowerText.includes("ยกเลิก") ||
+      lowerText.includes("ลบนัด")
+    ) {
+      handleCancelEventFromVoice(lowerText);
+      return;
+    }
+
+    // ===== เปลี่ยนวัน/เวลา =====
+    if (
+      lowerText.includes("เปลี่ยน") ||
+      lowerText.includes("เลื่อน")
+    ) {
+      handleUpdateEventFromVoice(lowerText);
+      return;
+    }
 
       speak("ขออภัยครับ ผมยังไม่เข้าใจคำสั่ง");
     };
@@ -105,8 +139,7 @@ export default function Dashboard() {
     const recognition = new SpeechRecognition();
     recognition.lang = "th-TH";
     recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
+    const newLocal = recognition.maxAlternatives = 1;
     recognition.onresult = (event: any) => {
       const transcript = event.results[0][0].transcript;
       handleVoiceCommand(transcript);
@@ -114,6 +147,41 @@ export default function Dashboard() {
 
     recognition.start();
   };
+
+      const handleAskEvents = () => {
+      const now = new Date();
+
+      const upcoming = events
+        .map((event) => ({
+          ...event,
+          eventDateTime: new Date(
+            `${event.event_date}T${event.event_time}`
+          ),
+        }))
+        .filter(
+          (event) => event.eventDateTime.getTime() > now.getTime()
+        )
+        .sort(
+          (a, b) =>
+            a.eventDateTime.getTime() -
+            b.eventDateTime.getTime()
+        );
+
+      if (upcoming.length === 0) {
+        speak("ตอนนี้คุณไม่มีนัดที่กำลังจะมาถึงครับ");
+        return;
+      }
+
+      // เอาแค่นัดถัดไป
+      const next = upcoming[0];
+
+      const time = next.eventDateTime.toLocaleTimeString("th-TH", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      speak(`นัดถัดไปของคุณคือ ${next.title} เวลา ${time} ครับ`);
+    };
 
   /* ================= AQI STYLE ================= */
 
@@ -155,7 +223,7 @@ export default function Dashboard() {
     weatherCache = { data: formatted, timestamp: now };
     setWeather(formatted.weather);
     setAqi(formatted.aqi);
-  }, []);
+  }, []);   
 
   /* ================= EFFECTS ================= */
 
@@ -165,12 +233,62 @@ export default function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    if (isMounted) {
+    useEffect(() => {
+      if (!isMounted) return;
+
       setName(localStorage.getItem('userName') || "User");
       fetchData();
-    }
-  }, [isMounted, fetchData]);
+
+      fetch('/api/events')
+        .then(res => res.json())
+        .then(data => {
+          setEvents(data.events || []);
+        })
+        .catch(() => setEvents([]));
+
+    }, [isMounted, fetchData]);
+
+    const upcomingEvents = useMemo(() => {
+      const now = new Date();
+
+      return events
+        .map((event) => {
+        const eventDateTime = new Date(
+          `${event.event_date}T${event.event_time}`
+        );
+          return { ...event, eventDateTime };
+        })
+        .filter((event) => event.eventDateTime.getTime() > now.getTime())
+        .sort(
+          (a, b) =>
+            a.eventDateTime.getTime() - b.eventDateTime.getTime()
+        );
+    }, [events, currentTime]);
+
+    useEffect(() => {
+      const interval = setInterval(() => {
+        const now = new Date();
+
+        events.forEach((event) => {
+        const eventDateTime = new Date(
+          `${event.event_date}T${event.event_time}`
+        );
+          const diff = eventDateTime.getTime() - now.getTime();
+
+          // 🔔 เตือนก่อน 30 วิ
+          if (
+            diff <= 30000 &&
+            diff > 0 &&
+            !notifiedEvents.includes(event.id)
+          ) {
+            speak(`อย่าลืมนะครับ คุณมีนัด ${event.title}`);
+            setNotifiedEvents((prev) => [...prev, event.id]);
+          }
+        });
+      }, 1000); // เช็คทุก 1 วิ ให้ real จริง
+
+      return () => clearInterval(interval);
+    }, [events, notifiedEvents]);
 
   /* ================= ANALYZE ================= */
 
@@ -191,15 +309,197 @@ export default function Dashboard() {
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('userName');
-    window.location.href = '/login';
-  };
+    const handleCreateEventFromVoiceNatural = async (text: string) => {
+      try {
+        let eventDate = "";
+        let eventTime = "";
+        const today = new Date();
 
+        // ===== 📅 จัดการวัน =====
+        if (text.includes("พรุ่งนี้")) {
+          const tomorrow = new Date(today);
+          tomorrow.setDate(today.getDate() + 1);
+          eventDate = tomorrow.toISOString().split("T")[0];
+        } else if (text.includes("วันนี้")) {
+          eventDate = today.toISOString().split("T")[0];
+        }
+
+    if (text.includes("บ่าย")) {
+   
+      const hourMatch = text.match(/\b([1-9]|1[0-2])\b/);
+
+      if (hourMatch) {
+        let hour = parseInt(hourMatch[0]);
+
+        if (hour < 12) {
+          hour += 12;
+        }
+
+        let minute = 0;
+
+        // 🔥 ถ้ามีคำว่า "ครึ่ง"
+        if (text.includes("ครึ่ง")) {
+          minute = 30;
+        } else {
+          // 🔥 หาเลขนาทีแบบยืดหยุ่น
+          const minuteMatch = text.match(/(\d{1,2})(?=\s*นาที|\b)/g);
+
+          if (minuteMatch && minuteMatch.length > 1) {
+            const parsedMinute = parseInt(minuteMatch[1]);
+
+            if (parsedMinute >= 0 && parsedMinute <= 59) {
+              minute = parsedMinute;
+            }
+          }
+        }
+        eventTime = `${hour.toString().padStart(2, "0")}:${minute
+          .toString()
+          .padStart(2, "0")}`;
+      }
+    }
+
+         const isValidTime = /^([01]\d|2[0-3]):([0-5]\d)$/.test(eventTime);
+          if (!isValidTime) {
+            speak("เวลาที่ระบุไม่ถูกต้องครับ");
+            return;
+          }
+
+        const timeMatch = text.match(/\d{1,2}[:.]\d{2}/);
+        if (timeMatch) {
+          eventTime = timeMatch[0].replace(".", ":");
+        }
+
+        let cleanTitle = text
+          .replace(
+            /สวัสดี|ทรูเอ็กซ์|ทรูเอ็ก|เพิ่มนัด|นัด|จอง|พรุ่งนี้|วันนี้|เช้า|บ่าย|โมง|ให้หน่อย/gi,
+            ""
+          )
+          .replace(/[:\-]/g, "")
+          .trim();
+
+        if (!eventDate || !eventTime || !cleanTitle) {
+          speak("ผมยังเข้าใจวันเวลาหรือรายละเอียดไม่ครบครับ");
+          return;
+        }
+
+        // ===== 🔥 ส่งไป backend =====
+        const res = await fetch("/api/events", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title: cleanTitle,
+            event_date: eventDate,
+            event_time: eventTime,
+          }),
+        });
+
+        if (!res.ok) {
+          speak("บันทึกไม่สำเร็จครับ");
+          return;
+        }
+    const result = await res.json();
+    setEvents((prev) => [...prev, result.event]);
+        speak(
+          `บันทึกนัด ${cleanTitle} วันที่ ${eventDate} เวลา ${eventTime} เรียบร้อยแล้วครับ`
+        );
+      } catch (error) {
+        console.error(error);
+        speak("เกิดข้อผิดพลาดในการเพิ่มนัดครับ");
+      }
+    };
+
+    const handleCancelEventFromVoice = async (text: string) => {
+      const keyword = text
+        .replace(/ยกเลิก|ลบนัด|นัด/gi, "")
+        .trim();
+
+      const found = events.find(event =>
+        event.title.includes(keyword)
+      );
+
+      if (!found) {
+        speak("ไม่พบนัดที่ต้องการยกเลิกครับ");
+        return;
+      }
+
+      try {
+        await fetch(`/api/events/${found.id}`, {
+          method: "DELETE",
+        });
+
+        setEvents(prev =>
+          prev.filter(event => event.id !== found.id)
+        );
+
+        speak(`ยกเลิกนัด ${found.title} เรียบร้อยแล้วครับ`);
+      } catch {
+        speak("เกิดข้อผิดพลาดในการยกเลิกนัดครับ");
+      }
+    };
+
+    const handleUpdateEventFromVoice = async (text: string) => {
+      const found = events.find(event =>
+        text.includes(event.title)
+      );
+
+      if (!found) {
+        speak("ไม่พบนัดที่ต้องการเปลี่ยนครับ");
+        return;
+      }
+
+      let newDate = found.event_date;
+      let newTime = found.event_time;
+
+      const today = new Date();
+
+      if (text.includes("พรุ่งนี้")) {
+        const tomorrow = new Date(today);
+        tomorrow.setDate(today.getDate() + 1);
+        newDate = tomorrow.toISOString().split("T")[0];
+      }
+
+      const hourMatch = text.match(/\d+/);
+      if (text.includes("บ่าย") && hourMatch) {
+        const hour = parseInt(hourMatch[0]) + 12;
+        newTime = `${hour.toString().padStart(2, "0")}:00`;
+      }
+
+      try {
+        await fetch(`/api/events/${found.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event_date: newDate,
+            event_time: newTime,
+          }),
+        });
+
+        setEvents(prev =>
+          prev.map(event =>
+            event.id === found.id
+              ? { ...event, event_date: newDate, event_time: newTime }
+              : event
+          )
+        );
+
+        speak(`เลื่อนนัด ${found.title} เรียบร้อยแล้วครับ`);
+      } catch {
+        speak("เกิดข้อผิดพลาดในการเปลี่ยนนัดครับ");
+      }
+    };
+
+      const logout = () => {
+        localStorage.removeItem('userName');
+        window.location.href = '/login';
+      };
+      
+
+  
   if (!isMounted) return null;
 
-  /* ================= UI (ของคุณเหมือนเดิมทั้งหมด) ================= */
-
+// UI
     return (
     <div className="min-h-screen bg-[#0c0f14] font-sans text-white transition-all duration-700">
 
@@ -254,112 +554,105 @@ export default function Dashboard() {
         </div>
       </nav>
 
-      <main className="max-w-6xl mx-auto p-10 grid grid-cols-1 md:grid-cols-3 gap-8">
+          <main className="max-w-6xl mx-auto p-10 grid grid-cols-1 md:grid-cols-3 gap-8">
 
-        <div className="md:col-span-2 space-y-6">
+      <div className="md:col-span-2 space-y-6">
 
-          <div className={`p-10 rounded-[2rem] border transition-all duration-700 relative overflow-hidden ${aqiStyle.bg} ${aqiStyle.border} ${aqiStyle.glow}`}>
-            <div className={`absolute top-0 right-0 w-2 h-full ${aqiStyle.dot}`}></div>
+        <div className={`p-10 rounded-[2rem] border transition-all duration-700 relative overflow-hidden ${aqiStyle.bg} ${aqiStyle.border} ${aqiStyle.glow}`}>
+          <div className={`absolute top-0 right-0 w-2 h-full ${aqiStyle.dot}`}></div>
 
-            <h2 className="text-red-400 font-semibold uppercase text-[11px] tracking-[0.3em] italic mb-4">
-              Live Air Quality Index
-            </h2>
+          <h2 className="text-red-400 font-semibold uppercase text-[11px] tracking-[0.3em] italic mb-4">
+            Live Air Quality Index
+          </h2>
 
-            <div className="flex items-baseline gap-4 mt-2">
-              <span className={`text-8xl font-black leading-none ${aqiStyle.text}`}>
-                {aqi}
+          <div className="flex items-baseline gap-4 mt-2">
+            <span className={`text-8xl font-black leading-none ${aqiStyle.text}`}>
+              {aqi}
+            </span>
+
+            <div className="flex flex-col gap-1">
+              <span className={`font-semibold text-xl flex items-center gap-2 ${aqiStyle.text}`}>
+                <span className={`w-3 h-3 rounded-full ${aqiStyle.dot} animate-pulse`}></span>
+                {aqiStyle.label}
               </span>
 
-              <div className="flex flex-col gap-1">
-                <span className={`font-semibold text-xl flex items-center gap-2 ${aqiStyle.text}`}>
-                  <span className={`w-3 h-3 rounded-full ${aqiStyle.dot} animate-pulse`}></span>
-                  {aqiStyle.label}
-                </span>
-
-                <span className="text-red-500/80 text-xs italic tracking-wide">
-                  Unlimited API Active
-                </span>
-              </div>
+              <span className="text-red-500/80 text-xs italic tracking-wide">
+                Unlimited API Active
+              </span>
             </div>
           </div>
-
-          <button
-            onClick={() => {
-              handleAnalyze();
-
-              const report = `
-              สวัสดีค่ะ คุณ ${name}
-
-              ตอนนี้ ที่ ${weather.city}
-              อุณหภูมิ อยู่ที่ ${weather.temp} องศาเซลเซียส
-              สภาพอากาศ ${weather.desc}
-
-              ค่าคุณภาพอากาศ หรือ เอคิวไอ อยู่ที่ ${aqi}
-              ซึ่งอยู่ในระดับ ${aqiStyle.label}
-
-              ${
-                aqi <= 50
-                  ? "อากาศดีมาก สามารถทำกิจกรรมกลางแจ้งได้ตามปกติค่ะ"
-                  : aqi <= 100
-                  ? "อากาศปานกลาง หากต้องอยู่กลางแจ้งนาน ควรสวมหน้ากากค่ะ"
-                  : aqi <= 150
-                  ? "เริ่มมีผลกระทบต่อสุขภาพ ควรลดเวลาทำกิจกรรมกลางแจ้งค่ะ"
-                  : "คุณภาพอากาศไม่ดีต่อสุขภาพ ควรหลีกเลี่ยงกิจกรรมกลางแจ้งค่ะ"
-              }
-              `;
-
-              speak(report);
-            }}
-            disabled={isLoading}
-            className="w-full bg-gradient-to-r from-red-700 to-red-600 
-            text-white p-8 rounded-[1.5rem] 
-            font-black text-xl tracking-wide
-            shadow-xl hover:from-red-600 hover:to-red-500 
-            hover:shadow-red-600/30 
-            transition-all duration-300 
-            active:scale-95 
-            disabled:from-slate-700 disabled:to-slate-700 
-            disabled:shadow-none"
-          >
-            {isLoading ? "ANALYZING..." : "ANALYZE WITH TRUEX AI"}
-          </button>
-
         </div>
 
+        <button
+          onClick={() => {
+            handleAnalyze();
+            const report = `...`;
+            speak(report);
+          }}
+          disabled={isLoading}
+          className="w-full bg-gradient-to-r from-red-700 to-red-600 
+          text-white p-8 rounded-[1.5rem] 
+          font-black text-xl tracking-wide
+          shadow-xl hover:from-red-600 hover:to-red-500 
+          hover:shadow-red-600/30 
+          transition-all duration-300 
+          active:scale-95 
+          disabled:from-slate-700 disabled:to-slate-700 
+          disabled:shadow-none"
+        >
+          {isLoading ? "ANALYZING..." : "ANALYZE WITH TRUEX AI"}
+        </button>
+
+        {/* ================= EVENTS SECTION ================= */}
+    <div className="bg-[#111418] p-8 rounded-[1.5rem] border border-red-900/30 shadow-lg">
+
+      <div className="flex justify-between items-center mb-6">
+        <h3 className="text-red-400 text-sm uppercase tracking-[0.3em] italic">
+          Upcoming Events
+        </h3>
+      </div>
+      {upcomingEvents.length === 0 ? (
+        <p className="text-white/50 text-sm">ยังไม่มีอีเวนต์</p>
+      ) : (
+        <div className="space-y-4">
+          {upcomingEvents.map((event) => (
+            <div
+              key={event.id}
+              className="p-4 bg-black/40 rounded-xl border border-red-800/20"
+            >
+              <p className="font-bold text-white">{event.title}</p>
+              <p className="text-sm text-white/60 mt-1">
+                {event.event_date} • {event.event_time}
+              </p>
+            </div>
+          ))}
+        </div>
+  )}
+</div>
+        {/* ================================================== */}
+      </div>
         <div className="bg-gradient-to-br from-[#111418] to-[#0f0f12] 
         p-10 rounded-[2rem] 
         text-white flex flex-col justify-between 
         shadow-xl min-h-[400px] 
         border border-red-900/30 
-        relative overflow-hidden">
+        relative overflow-hidden
+        self-start">
 
-          <div className="text-6xl opacity-5 text-red-500 italic font-serif">“</div>
+        <div className="text-6xl opacity-5 text-red-500 italic font-serif">“</div>
 
-          <div className="z-10 relative">
-            <h3 className="text-xs font-semibold text-red-400 mb-3 
-            tracking-[0.35em] uppercase italic 
-            border-b border-red-900/40 pb-3">
-              TrueX Smart Insight
-            </h3>
-
-            <p className="text-xl font-medium leading-relaxed mt-4 text-white/90">
-              {aiAdvice}
-            </p>
-          </div>
-
-          <div className="mt-8 flex gap-2 h-10 items-end">
-            {[0.4, 0.9, 0.6, 1, 0.5, 0.8, 0.4].map((h, i) => (
-              <div
-                key={i}
-                className={`flex-1 bg-white/30 rounded-full ${isLoading ? 'animate-pulse' : 'animate-bounce'}`}
-                style={{ height: `${h * 100}%`, animationDelay: `${i * 0.1}s` }}
-              ></div>
-            ))}
-          </div>
-
+        <div className="z-10 relative">
+          <h3 className="text-xs font-semibold text-red-400 mb-3 
+          tracking-[0.35em] uppercase italic 
+          border-b border-red-900/40 pb-3">
+            TrueX Smart Insight
+          </h3>
+          <p className="text-xl font-medium leading-relaxed mt-4 text-white/90">
+            {aiAdvice}
+          </p>
         </div>
-
-      </main>
+      </div>
+    </main>
     </div>
   );
 }

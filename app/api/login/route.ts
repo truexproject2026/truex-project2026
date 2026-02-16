@@ -25,6 +25,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ user });
   } catch (err) {
     console.error('Login API Error:', err);
+    console.log("URL:", process.env.NEXT_PUBLIC_SUPABASE_URL);
+    console.log("KEY:", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
     return NextResponse.json({ message: 'เกิดข้อผิดพลาดที่เซิร์ฟเวอร์' }, { status: 500 });
   }
 }

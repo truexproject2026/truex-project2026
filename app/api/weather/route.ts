@@ -1,4 +1,4 @@
-export const runtime = 'edge'; // ⚡ เพิ่มบรรทัดนี้ครับ
+export const runtime = 'edge'; 
 import { NextResponse } from "next/server";
 
 export async function GET(req: Request) {
@@ -33,7 +33,7 @@ export async function GET(req: Request) {
       temp: wData.main ? Math.round(wData.main.temp) : 0,
       desc: wData.weather ? wData.weather[0].description : "Unknown",
       city: wData.name || "Unknown Location",
-      aqi: Math.round(displayAqi), // ส่งค่าที่คำนวณแล้วไปโชว์
+      aqi: Math.round(displayAqi), 
     });
 
   } catch (error) {
