@@ -43,17 +43,9 @@ export default function Dashboard() {
 
     const handleVoiceCommand = (text: string) => {
       const lowerText = text.toLowerCase().trim();
-
       console.log("ได้ยินว่า:", lowerText);
 
-      const wakePatterns = [
-        "ทรู",
-        "ทู",
-        "true",
-        "เอ็ก",
-        "เอ็กซ์",
-        "เอก"
-      ];
+      const wakePatterns = ["ทรู", "ทู", "true", "เอ็ก", "เอ็กซ์", "เอก"];
 
       const hasWakeWord = wakePatterns.some(word =>
         lowerText.includes(word)
@@ -64,12 +56,12 @@ export default function Dashboard() {
         lowerText.includes("หวัดดี") ||
         lowerText.includes("hello");
 
-      // 🔥 ถ้ามีคำทักทาย + มีคำใกล้เคียงทรูเอ็กซ์
       if (hasWakeWord && hasGreeting) {
         speak(`ครับ คุณ ${name} มีอะไรให้ผมช่วย`);
         return;
       }
 
+      // ===== อากาศ =====
       if (lowerText.includes("อากาศ")) {
         speak(`
           ตอนนี้ที่ ${weather.city}
@@ -79,47 +71,59 @@ export default function Dashboard() {
         `);
         return;
       }
-    // ===== ถามว่าวันนี้มีนัดอะไร =====
+
+      // ===== ถามว่านัดอะไร =====
       if (
-          lowerText.includes("มีนัด") ||
-          lowerText.includes("นัดอะไร") ||
-          lowerText.includes("นัดบ้าง")
-        ) {
-           handleAskEvents();
-            return;
-    }
+        lowerText.includes("มีนัด") ||
+        lowerText.includes("นัดอะไร") ||
+        lowerText.includes("นัดบ้าง")
+      ) {
+        handleAskEvents();
+        return;
+      }
+
+      // ===== วิเคราะห์ =====
       if (lowerText.includes("วิเคราะห์")) {
         handleAnalyze();
         speak("กำลังวิเคราะห์ข้อมูลให้ครับ");
         return;
       }
-      // ===== เพิ่มนัดด้วยเสียง =====
-    if (
-      lowerText.includes("นัด") ||
-      lowerText.includes("เพิ่มนัด") ||
-      lowerText.includes("จอง")
-    ) {
-      handleCreateEventFromVoiceNatural(lowerText);
-      return;
-    }
 
-    // ===== ยกเลิกนัด =====
-    if (
-      lowerText.includes("ยกเลิก") ||
-      lowerText.includes("ลบนัด")
-    ) {
-      handleCancelEventFromVoice(lowerText);
-      return;
-    }
+      // 🔥 สำคัญ: เรียงจากเฉพาะ → กว้าง
 
-    // ===== เปลี่ยนวัน/เวลา =====
-    if (
-      lowerText.includes("เปลี่ยน") ||
-      lowerText.includes("เลื่อน")
-    ) {
-      handleUpdateEventFromVoice(lowerText);
-      return;
-    }
+      // ===== เปลี่ยน / เลื่อน =====
+      if (
+        lowerText.includes("เปลี่ยน") ||
+        lowerText.includes("เลื่อน")
+      ) {
+        handleUpdateEventFromVoice(lowerText);
+        return;
+      }
+
+      // ===== ยกเลิก =====
+      if (
+        lowerText.includes("ยกเลิก") ||
+        lowerText.includes("ลบนัด")
+      ) {
+        handleCancelEventFromVoice(lowerText);
+        return;
+      }
+
+      // ===== เพิ่มนัด =====
+      if (
+        lowerText.includes("เพิ่มนัด") ||
+        lowerText.includes("จอง") ||
+        (
+          lowerText.includes("นัด") &&
+          !lowerText.includes("มีนัด") &&
+          !lowerText.includes("นัดอะไร") &&
+          !lowerText.includes("เลื่อน") &&
+          !lowerText.includes("เปลี่ยน")
+        )
+      ) {
+        handleCreateEventFromVoiceNatural(lowerText);
+        return;
+      }
 
       speak("ขออภัยครับ ผมยังไม่เข้าใจคำสั่ง");
     };
@@ -152,12 +156,20 @@ export default function Dashboard() {
       const now = new Date();
 
       const upcoming = events
-        .map((event) => ({
-          ...event,
-          eventDateTime: new Date(
-            `${event.event_date}T${event.event_time}`
-          ),
-        }))
+        .map((event) => {
+          const [year, month, day] = event.event_date.split("-");
+          const [hour, minute] = event.event_time.split(":");
+
+          const eventDateTime = new Date(
+            Number(year),
+            Number(month) - 1,
+            Number(day),
+            Number(hour),
+            Number(minute)
+          );
+
+          return { ...event, eventDateTime };
+        })
         .filter(
           (event) => event.eventDateTime.getTime() > now.getTime()
         )
@@ -253,29 +265,42 @@ export default function Dashboard() {
 
       return events
         .map((event) => {
-        const eventDateTime = new Date(
-          `${event.event_date}T${event.event_time}`
-        );
+          const [year, month, day] = event.event_date.split("-");
+          const [hour, minute] = event.event_time.split(":");
+
+          const eventDateTime = new Date(
+            Number(year),
+            Number(month) - 1,
+            Number(day),
+            Number(hour),
+            Number(minute)
+          );
+          console.log("NOW:", new Date());
+          console.log("EVENTS:", events);
           return { ...event, eventDateTime };
         })
         .filter((event) => event.eventDateTime.getTime() > now.getTime())
-        .sort(
-          (a, b) =>
-            a.eventDateTime.getTime() - b.eventDateTime.getTime()
-        );
+        .sort((a, b) => a.eventDateTime.getTime() - b.eventDateTime.getTime());
     }, [events, currentTime]);
+    ;
 
     useEffect(() => {
       const interval = setInterval(() => {
         const now = new Date();
 
         events.forEach((event) => {
-        const eventDateTime = new Date(
-          `${event.event_date}T${event.event_time}`
-        );
-          const diff = eventDateTime.getTime() - now.getTime();
+      const [year, month, day] = event.event_date.split("-");
+      const [hour, minute] = event.event_time.split(":");
 
-          // 🔔 เตือนก่อน 30 วิ
+      const eventDateTime = new Date(
+        Number(year),
+        Number(month) - 1,
+        Number(day),
+        Number(hour),
+        Number(minute)
+      );
+          const diff = eventDateTime.getTime() - now.getTime();
+          //  เตือนก่อน 30 วิ
           if (
             diff <= 30000 &&
             diff > 0 &&
@@ -324,65 +349,27 @@ export default function Dashboard() {
           eventDate = today.toISOString().split("T")[0];
         }
 
-    if (text.includes("บ่าย")) {
-   
-      const hourMatch = text.match(/\b([1-9]|1[0-2])\b/);
+        // ===== 🕒 ใช้ Natural Thai Time Parser =====
+        eventTime = parseThaiTime(text) || "";
 
-      if (hourMatch) {
-        let hour = parseInt(hourMatch[0]);
-
-        if (hour < 12) {
-          hour += 12;
-        }
-
-        let minute = 0;
-
-        // 🔥 ถ้ามีคำว่า "ครึ่ง"
-        if (text.includes("ครึ่ง")) {
-          minute = 30;
-        } else {
-          // 🔥 หาเลขนาทีแบบยืดหยุ่น
-          const minuteMatch = text.match(/(\d{1,2})(?=\s*นาที|\b)/g);
-
-          if (minuteMatch && minuteMatch.length > 1) {
-            const parsedMinute = parseInt(minuteMatch[1]);
-
-            if (parsedMinute >= 0 && parsedMinute <= 59) {
-              minute = parsedMinute;
-            }
-          }
-        }
-        eventTime = `${hour.toString().padStart(2, "0")}:${minute
-          .toString()
-          .padStart(2, "0")}`;
-      }
-    }
-
-         const isValidTime = /^([01]\d|2[0-3]):([0-5]\d)$/.test(eventTime);
-          if (!isValidTime) {
-            speak("เวลาที่ระบุไม่ถูกต้องครับ");
-            return;
-          }
-
-        const timeMatch = text.match(/\d{1,2}[:.]\d{2}/);
-        if (timeMatch) {
-          eventTime = timeMatch[0].replace(".", ":");
+        if (!eventTime) {
+          speak("ผมยังเข้าใจเวลาไม่ถูกต้องครับ");
+          return;
         }
 
         let cleanTitle = text
           .replace(
-            /สวัสดี|ทรูเอ็กซ์|ทรูเอ็ก|เพิ่มนัด|นัด|จอง|พรุ่งนี้|วันนี้|เช้า|บ่าย|โมง|ให้หน่อย/gi,
+            /สวัสดี|ทรูเอ็กซ์|ทรูเอ็ก|เพิ่มนัด|นัด|จอง|พรุ่งนี้|วันนี้|เช้า|บ่าย|โมง|ทุ่ม|ตี|ครึ่ง|เที่ยง|เย็น|ให้หน่อย/gi,
             ""
           )
           .replace(/[:\-]/g, "")
           .trim();
 
-        if (!eventDate || !eventTime || !cleanTitle) {
-          speak("ผมยังเข้าใจวันเวลาหรือรายละเอียดไม่ครบครับ");
+        if (!eventDate || !cleanTitle) {
+          speak("ผมยังเข้าใจวันหรือรายละเอียดไม่ครบครับ");
           return;
         }
 
-        // ===== 🔥 ส่งไป backend =====
         const res = await fetch("/api/events", {
           method: "POST",
           headers: {
@@ -399,8 +386,10 @@ export default function Dashboard() {
           speak("บันทึกไม่สำเร็จครับ");
           return;
         }
-    const result = await res.json();
-    setEvents((prev) => [...prev, result.event]);
+
+        const result = await res.json();
+        setEvents((prev) => [...prev, result.event]);
+
         speak(
           `บันทึกนัด ${cleanTitle} วันที่ ${eventDate} เวลา ${eventTime} เรียบร้อยแล้วครับ`
         );
@@ -410,38 +399,39 @@ export default function Dashboard() {
       }
     };
 
-    const handleCancelEventFromVoice = async (text: string) => {
-      const keyword = text
-        .replace(/ยกเลิก|ลบนัด|นัด/gi, "")
-        .trim();
 
-      const found = events.find(event =>
-        event.title.includes(keyword)
-      );
+        const handleCancelEventFromVoice = async (text: string) => {
+          const keyword = text
+            .replace(/ยกเลิก|ลบนัด|นัด/gi, "")
+            .trim();
 
-      if (!found) {
-        speak("ไม่พบนัดที่ต้องการยกเลิกครับ");
-        return;
-      }
+          const found = events.find(event =>
+            event.title.includes(keyword)
+          );
 
-      try {
-        await fetch(`/api/events/${found.id}`, {
-          method: "DELETE",
-        });
+          if (!found) {
+            speak("ไม่พบนัดที่ต้องการยกเลิกครับ");
+            return;
+          }
 
-        setEvents(prev =>
-          prev.filter(event => event.id !== found.id)
-        );
+          try {
+            await fetch(`/api/events/${found.id}`, {
+              method: "DELETE",
+            });
 
-        speak(`ยกเลิกนัด ${found.title} เรียบร้อยแล้วครับ`);
-      } catch {
-        speak("เกิดข้อผิดพลาดในการยกเลิกนัดครับ");
-      }
-    };
+            setEvents(prev =>
+              prev.filter(event => event.id !== found.id)
+            );
+
+            speak(`ยกเลิกนัด ${found.title} เรียบร้อยแล้วครับ`);
+          } catch {
+            speak("เกิดข้อผิดพลาดในการยกเลิกนัดครับ");
+          }
+        };
 
     const handleUpdateEventFromVoice = async (text: string) => {
       const found = events.find(event =>
-        text.includes(event.title)
+        text.includes(event.title.toLowerCase())
       );
 
       if (!found) {
@@ -454,16 +444,19 @@ export default function Dashboard() {
 
       const today = new Date();
 
+      // ===== 📅 จัดการวัน =====
       if (text.includes("พรุ่งนี้")) {
         const tomorrow = new Date(today);
         tomorrow.setDate(today.getDate() + 1);
         newDate = tomorrow.toISOString().split("T")[0];
+      } else if (text.includes("วันนี้")) {
+        newDate = today.toISOString().split("T")[0];
       }
 
-      const hourMatch = text.match(/\d+/);
-      if (text.includes("บ่าย") && hourMatch) {
-        const hour = parseInt(hourMatch[0]) + 12;
-        newTime = `${hour.toString().padStart(2, "0")}:00`;
+      // ===== 🕒 ใช้ Natural Parser เหมือนตอนเพิ่ม =====
+      const parsedTime = parseThaiTime(text);
+      if (parsedTime) {
+        newTime = parsedTime;
       }
 
       try {
@@ -484,19 +477,150 @@ export default function Dashboard() {
           )
         );
 
-        speak(`เลื่อนนัด ${found.title} เรียบร้อยแล้วครับ`);
+        speak(`เลื่อนนัด ${found.title} เป็นวันที่ ${newDate} เวลา ${newTime} เรียบร้อยแล้วครับ`);
       } catch {
         speak("เกิดข้อผิดพลาดในการเปลี่ยนนัดครับ");
       }
     };
+    ;
 
       const logout = () => {
         localStorage.removeItem('userName');
         window.location.href = '/login';
       };
-      
+    const convertThaiNumber = (text: string) => {
+      const map: Record<string, string> = {
+        "หนึ่ง": "1",
+        "เอ็ด": "1",      
+        "สอง": "2",
+        "สาม": "3",
+        "สี่": "4",
+        "ห้า": "5",
+        "หก": "6",
+        "เจ็ด": "7",
+        "แปด": "8",
+        "เก้า": "9",
+      };
 
-  
+      let result = text;
+
+      Object.keys(map).forEach((key) => {
+        result = result.replace(new RegExp(key, "g"), map[key]);
+      });
+
+      return result;
+    };
+
+    const parseThaiMinute = (text: string) => {
+      const minuteMap: Record<string, number> = {
+        "สิบห้า": 15,
+        "ยี่สิบ": 20,
+        "ยี่สิบห้า": 25,
+        "สามสิบ": 30,
+        "สามสิบห้า": 35,
+        "สี่สิบ": 40,
+        "สี่สิบห้า": 45,
+        "ห้าสิบ": 50,
+        "ห้าสิบห้า": 55,
+      };
+
+      for (const key in minuteMap) {
+        if (text.includes(key)) {
+          return minuteMap[key];
+        }
+      }
+
+      // ✅ รองรับ 1ทุ่ม15 / 1ทุ่ม 15 / ทุ่ม15 / ทุ่ม 15
+      const numberMinuteMatch = text.match(/ทุ่ม\s*(\d{1,2})/);
+      if (numberMinuteMatch) {
+        return parseInt(numberMinuteMatch[1]);
+      }
+
+      // ✅ รองรับ บ่าย3โมง45 / 3โมง45
+      const mongMinuteMatch = text.match(/โมง\s*(\d{1,2})/);
+      if (mongMinuteMatch) {
+        return parseInt(mongMinuteMatch[1]);
+      }
+
+      return null;
+    };
+
+    const parseThaiTime = (text: string) => {
+      text = text.replace(/ครับ|ค่ะ|นะ|หน่อย|ที|ให้หน่อย/gi, "");
+      text = convertThaiNumber(text);
+      text = text.replace(/\s+/g, "");
+
+      let hour: number | null = null;
+      let minute = 0;
+
+      // 1️⃣ ดิจิตอล 9:30 / 9.30
+      const digitalMatch = text.match(/(\d{1,2})[:.](\d{2})/);
+      if (digitalMatch) {
+        hour = parseInt(digitalMatch[1]);
+        minute = parseInt(digitalMatch[2]);
+      }
+
+      // 2️⃣ เที่ยง
+      if (text.includes("เที่ยงคืน")) hour = 0;
+      else if (text.includes("เที่ยง")) hour = 12;
+
+      // 3️⃣ ตี
+      const teeMatch = text.match(/ตี(\d+)/);
+      if (teeMatch) hour = parseInt(teeMatch[1]);
+
+      // 4️⃣ ทุ่ม
+      const thumMatch = text.match(/(\d+)ทุ่ม/);
+      if (thumMatch) hour = parseInt(thumMatch[1]) + 18;
+
+      if (text.includes("ทุ่มนึง") || text.includes("ทุ่มหนึ่ง")) {
+        hour = 19;
+      }
+
+      // 5️⃣ บ่าย
+      const baiMatch = text.match(/บ่าย(\d+)/);
+      if (baiMatch) {
+        hour = parseInt(baiMatch[1]);
+        if (hour < 12) hour += 12;
+      }
+
+      // 6️⃣ โมง
+      const mongMatch = text.match(/(\d+)โมง/);
+      if (mongMatch) {
+        hour = parseInt(mongMatch[1]);
+
+        if (text.includes("เย็น")) {
+          if (hour < 12) hour += 12;
+        } else if (!text.includes("เช้า")) {
+          if (hour <= 6) hour += 12;
+        }
+      }
+
+      // ===== นาที =====
+
+      // ครึ่ง
+      if (text.includes("ครึ่ง")) minute = 30;
+
+      // ใช้ parseThaiMinute จัดการนาทีทั้งหมด
+      const thaiMinute = parseThaiMinute(text);
+      if (thaiMinute !== null) minute = thaiMinute;
+
+      // Validate
+      if (
+        hour !== null &&
+        hour >= 0 &&
+        hour <= 23 &&
+        minute >= 0 &&
+        minute <= 59
+      ) {
+        return `${hour.toString().padStart(2, "0")}:${minute
+          .toString()
+          .padStart(2, "0")}`;
+      }
+
+      return null;
+    };
+
+
   if (!isMounted) return null;
 
 // UI
