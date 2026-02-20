@@ -210,9 +210,9 @@ export default function Dashboard() {
     return { dot: "bg-purple-700", text: "text-purple-500", border: "border-purple-600/40", bg: "", glow: "", label: "อันตรายมาก" };
   }, [aqi]);
 
-  /* ================= FETCH DATA ================= */
+  /* ================= FETCH DATA (UPDATED) ================= */
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (lat: number = 13.75, lon: number = 100.50) => {
     const now = Date.now();
     if (weatherCache && now - weatherCache.timestamp < CACHE_DURATION) {
       setWeather(weatherCache.data.weather);
@@ -220,7 +220,7 @@ export default function Dashboard() {
       return;
     }
 
-    const res = await fetch(`/api/weather?lat=13.75&lon=100.50`);
+    const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
     const data = await res.json();
 
     const formatted = {
@@ -237,7 +237,7 @@ export default function Dashboard() {
     setAqi(formatted.aqi);
   }, []);   
 
-  /* ================= EFFECTS ================= */
+  /* ================= EFFECTS (UPDATED) ================= */
 
   useEffect(() => {
     setIsMounted(true);
@@ -249,7 +249,21 @@ export default function Dashboard() {
       if (!isMounted) return;
 
       setName(localStorage.getItem('userName') || "User");
-      fetchData();
+
+      // เรียกขอตำแหน่งจากเบราว์เซอร์
+      if ("geolocation" in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            fetchData(position.coords.latitude, position.coords.longitude);
+          },
+          (error) => {
+            console.error("Geolocation Error:", error);
+            fetchData(); // fallback ใช้กรุงเทพฯ
+          }
+        );
+      } else {
+        fetchData(); // fallback
+      }
 
       fetch('/api/events')
         .then(res => res.json())
@@ -275,32 +289,28 @@ export default function Dashboard() {
             Number(hour),
             Number(minute)
           );
-          console.log("NOW:", new Date());
-          console.log("EVENTS:", events);
           return { ...event, eventDateTime };
         })
         .filter((event) => event.eventDateTime.getTime() > now.getTime())
         .sort((a, b) => a.eventDateTime.getTime() - b.eventDateTime.getTime());
     }, [events, currentTime]);
-    ;
 
     useEffect(() => {
       const interval = setInterval(() => {
         const now = new Date();
 
         events.forEach((event) => {
-      const [year, month, day] = event.event_date.split("-");
-      const [hour, minute] = event.event_time.split(":");
+          const [year, month, day] = event.event_date.split("-");
+          const [hour, minute] = event.event_time.split(":");
 
-      const eventDateTime = new Date(
-        Number(year),
-        Number(month) - 1,
-        Number(day),
-        Number(hour),
-        Number(minute)
-      );
+          const eventDateTime = new Date(
+            Number(year),
+            Number(month) - 1,
+            Number(day),
+            Number(hour),
+            Number(minute)
+          );
           const diff = eventDateTime.getTime() - now.getTime();
-          //  เตือนก่อน 30 วิ
           if (
             diff <= 30000 &&
             diff > 0 &&
@@ -310,7 +320,7 @@ export default function Dashboard() {
             setNotifiedEvents((prev) => [...prev, event.id]);
           }
         });
-      }, 1000); // เช็คทุก 1 วิ ให้ real จริง
+      }, 1000);
 
       return () => clearInterval(interval);
     }, [events, notifiedEvents]);
@@ -340,7 +350,6 @@ export default function Dashboard() {
         let eventTime = "";
         const today = new Date();
 
-        // ===== 📅 จัดการวัน =====
         if (text.includes("พรุ่งนี้")) {
           const tomorrow = new Date(today);
           tomorrow.setDate(today.getDate() + 1);
@@ -349,7 +358,6 @@ export default function Dashboard() {
           eventDate = today.toISOString().split("T")[0];
         }
 
-        // ===== 🕒 ใช้ Natural Thai Time Parser =====
         eventTime = parseThaiTime(text) || "";
 
         if (!eventTime) {
@@ -399,7 +407,6 @@ export default function Dashboard() {
       }
     };
 
-
         const handleCancelEventFromVoice = async (text: string) => {
           const keyword = text
             .replace(/ยกเลิก|ลบนัด|นัด/gi, "")
@@ -444,7 +451,6 @@ export default function Dashboard() {
 
       const today = new Date();
 
-      // ===== 📅 จัดการวัน =====
       if (text.includes("พรุ่งนี้")) {
         const tomorrow = new Date(today);
         tomorrow.setDate(today.getDate() + 1);
@@ -453,7 +459,6 @@ export default function Dashboard() {
         newDate = today.toISOString().split("T")[0];
       }
 
-      // ===== 🕒 ใช้ Natural Parser เหมือนตอนเพิ่ม =====
       const parsedTime = parseThaiTime(text);
       if (parsedTime) {
         newTime = parsedTime;
@@ -482,7 +487,6 @@ export default function Dashboard() {
         speak("เกิดข้อผิดพลาดในการเปลี่ยนนัดครับ");
       }
     };
-    ;
 
       const logout = () => {
         localStorage.removeItem('userName');
@@ -503,44 +507,27 @@ export default function Dashboard() {
       };
 
       let result = text;
-
       Object.keys(map).forEach((key) => {
         result = result.replace(new RegExp(key, "g"), map[key]);
       });
-
       return result;
     };
 
     const parseThaiMinute = (text: string) => {
       const minuteMap: Record<string, number> = {
-        "สิบห้า": 15,
-        "ยี่สิบ": 20,
-        "ยี่สิบห้า": 25,
-        "สามสิบ": 30,
-        "สามสิบห้า": 35,
-        "สี่สิบ": 40,
-        "สี่สิบห้า": 45,
-        "ห้าสิบ": 50,
-        "ห้าสิบห้า": 55,
+        "สิบห้า": 15, "ยี่สิบ": 20, "ยี่สิบห้า": 25, "สามสิบ": 30,
+        "สามสิบห้า": 35, "สี่สิบ": 40, "สี่สิบห้า": 45, "ห้าสิบ": 50, "ห้าสิบห้า": 55,
       };
 
       for (const key in minuteMap) {
-        if (text.includes(key)) {
-          return minuteMap[key];
-        }
+        if (text.includes(key)) return minuteMap[key];
       }
 
-      // ✅ รองรับ 1ทุ่ม15 / 1ทุ่ม 15 / ทุ่ม15 / ทุ่ม 15
       const numberMinuteMatch = text.match(/ทุ่ม\s*(\d{1,2})/);
-      if (numberMinuteMatch) {
-        return parseInt(numberMinuteMatch[1]);
-      }
+      if (numberMinuteMatch) return parseInt(numberMinuteMatch[1]);
 
-      // ✅ รองรับ บ่าย3โมง45 / 3โมง45
       const mongMinuteMatch = text.match(/โมง\s*(\d{1,2})/);
-      if (mongMinuteMatch) {
-        return parseInt(mongMinuteMatch[1]);
-      }
+      if (mongMinuteMatch) return parseInt(mongMinuteMatch[1]);
 
       return null;
     };
@@ -553,41 +540,32 @@ export default function Dashboard() {
       let hour: number | null = null;
       let minute = 0;
 
-      // 1️⃣ ดิจิตอล 9:30 / 9.30
       const digitalMatch = text.match(/(\d{1,2})[:.](\d{2})/);
       if (digitalMatch) {
         hour = parseInt(digitalMatch[1]);
         minute = parseInt(digitalMatch[2]);
       }
 
-      // 2️⃣ เที่ยง
       if (text.includes("เที่ยงคืน")) hour = 0;
       else if (text.includes("เที่ยง")) hour = 12;
 
-      // 3️⃣ ตี
       const teeMatch = text.match(/ตี(\d+)/);
       if (teeMatch) hour = parseInt(teeMatch[1]);
 
-      // 4️⃣ ทุ่ม
       const thumMatch = text.match(/(\d+)ทุ่ม/);
       if (thumMatch) hour = parseInt(thumMatch[1]) + 18;
 
-      if (text.includes("ทุ่มนึง") || text.includes("ทุ่มหนึ่ง")) {
-        hour = 19;
-      }
+      if (text.includes("ทุ่มนึง") || text.includes("ทุ่มหนึ่ง")) hour = 19;
 
-      // 5️⃣ บ่าย
       const baiMatch = text.match(/บ่าย(\d+)/);
       if (baiMatch) {
         hour = parseInt(baiMatch[1]);
         if (hour < 12) hour += 12;
       }
 
-      // 6️⃣ โมง
       const mongMatch = text.match(/(\d+)โมง/);
       if (mongMatch) {
         hour = parseInt(mongMatch[1]);
-
         if (text.includes("เย็น")) {
           if (hour < 12) hour += 12;
         } else if (!text.includes("เช้า")) {
@@ -595,35 +573,19 @@ export default function Dashboard() {
         }
       }
 
-      // ===== นาที =====
-
-      // ครึ่ง
       if (text.includes("ครึ่ง")) minute = 30;
-
-      // ใช้ parseThaiMinute จัดการนาทีทั้งหมด
       const thaiMinute = parseThaiMinute(text);
       if (thaiMinute !== null) minute = thaiMinute;
 
-      // Validate
-      if (
-        hour !== null &&
-        hour >= 0 &&
-        hour <= 23 &&
-        minute >= 0 &&
-        minute <= 59
-      ) {
-        return `${hour.toString().padStart(2, "0")}:${minute
-          .toString()
-          .padStart(2, "0")}`;
+      if (hour !== null && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59) {
+        return `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
       }
 
       return null;
     };
 
-
   if (!isMounted) return null;
 
-// UI
     return (
     <div className="min-h-screen bg-[#0c0f14] font-sans text-white transition-all duration-700">
 
@@ -727,7 +689,6 @@ export default function Dashboard() {
           {isLoading ? "ANALYZING..." : "ANALYZE WITH TRUEX AI"}
         </button>
 
-        {/* ================= EVENTS SECTION ================= */}
     <div className="bg-[#111418] p-8 rounded-[1.5rem] border border-red-900/30 shadow-lg">
 
       <div className="flex justify-between items-center mb-6">
@@ -753,7 +714,6 @@ export default function Dashboard() {
         </div>
   )}
 </div>
-        {/* ================================================== */}
       </div>
         <div className="bg-gradient-to-br from-[#111418] to-[#0f0f12] 
         p-10 rounded-[2rem] 
