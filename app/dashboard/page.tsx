@@ -12,6 +12,7 @@ export default function Dashboard() {
   const [events, setEvents] = useState<any[]>([]);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [voiceSupported, setVoiceSupported] = useState(false);
   const router = useRouter();
 
   // 🔑 Google OAuth Logic
@@ -237,10 +238,21 @@ export default function Dashboard() {
 
   const startListening = () => {
     const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!Recognition) return;
+    if (!Recognition) {
+      // browser doesn’t support speech recognition (e.g. Safari on Mac/iOS).
+      // fall back to a simple text prompt so the app still works everywhere.
+      const typed = window.prompt("ดูเหมือนเบราว์เซอร์ของคุณไม่รองรับการพูด ถ้าต้องการสั่งงาน ให้พิมพ์คำสั่งลงไป:");
+      if (typed) handleVoiceCommand(typed);
+      return;
+    }
     const rec = new Recognition();
     rec.lang = "th-TH";
     rec.onresult = (e: any) => handleVoiceCommand(e.results[0][0].transcript);
+    rec.onerror = () => {
+      // if recognition fails, let user type instead
+      const fallback = window.prompt("เกิดข้อผิดพลาดในการฟังเสียง โปรดพิมพ์คำสั่งแทน:");
+      if (fallback) handleVoiceCommand(fallback);
+    };
     rec.start();
   };
 
@@ -254,7 +266,46 @@ export default function Dashboard() {
     finally { setIsLoading(false); }
   };
 
+  const requestLocation = () => {
+    if (!navigator.geolocation) return;
+
+    // proactively check permission status (Chrome, Edge, Firefox)
+    if (navigator.permissions) {
+      navigator.permissions.query({ name: 'geolocation' as PermissionName }).then(status => {
+        if (status.state === 'denied') {
+          speak('ระบบต้องการตำแหน่งของคุณ กรุณาอนุญาตในเบราว์เซอร์');
+        }
+      }).catch(() => {});
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        setLocation({ lat: latitude, lon: longitude });
+        try {
+          const res = await fetch(`/api/weather?lat=${latitude}&lon=${longitude}`);
+          const d = await res.json();
+          setWeather({ temp: d.temp, desc: d.desc, city: d.city });
+          setAqi(d.aqi);
+        } catch (err) {
+          console.error('weather fetch failed', err);
+        }
+      },
+      (err) => {
+        console.warn('geolocation error', err);
+        // show user message if denied
+        if (err.code === err.PERMISSION_DENIED) {
+          speak('ไม่สามารถดึงตำแหน่งได้ ถ้าต้องการข้อมูลฝุ่นกรุณาอนุญาตตำแหน่ง');
+        }
+      }
+    );
+  };
+
   useEffect(() => {
+    // detect speech recognition availability
+    const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    setVoiceSupported(!!Recognition);
+
     setIsMounted(true);
     const hash = window.location.hash;
     if (hash) {
@@ -262,16 +313,9 @@ export default function Dashboard() {
       const token = params.get('access_token');
       if (token) { setGoogleToken(token); fetchGoogleEvents(token); window.history.replaceState(null, "", window.location.pathname); }
     }
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(async (position) => {
-        const { latitude, longitude } = position.coords;
-        setLocation({ lat: latitude, lon: longitude });
-        const res = await fetch(`/api/weather?lat=${latitude}&lon=${longitude}`);
-        const d = await res.json();
-        setWeather({ temp: d.temp, desc: d.desc, city: d.city });
-        setAqi(d.aqi);
-      });
-    }
+
+    // ask for location immediately on dashboard load
+    requestLocation();
   }, [fetchGoogleEvents]);
 
   if (!isMounted) return null;
@@ -303,8 +347,13 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <button onClick={startListening} className="w-full bg-gradient-to-r from-red-600 to-red-700 py-10 rounded-[3rem] text-2xl font-black shadow-[0_20px_40px_rgba(220,38,38,0.3)] active:scale-95 transition-all flex items-center justify-center gap-4 border-b-4 border-red-800">
-            <span className="text-4xl">🎙️</span> พูดกับ TrueX
+          <button
+            onClick={startListening}
+            disabled={!voiceSupported}
+            className={`w-full py-10 rounded-[3rem] text-2xl font-black shadow-[0_20px_40px_rgba(220,38,38,0.3)] active:scale-95 transition-all flex items-center justify-center gap-4 border-b-4 border-red-800 ${voiceSupported ? 'bg-gradient-to-r from-red-600 to-red-700' : 'bg-gray-600 cursor-not-allowed'}`}
+            title={voiceSupported ? 'พูดกับ TrueX' : 'เบราว์เซอร์ไม่รองรับการสั่งด้วยเสียง'}
+          >
+            <span className="text-4xl">🎙️</span> {voiceSupported ? 'พูดกับ TrueX' : 'สั่งด้วยข้อความได้'}
           </button>
 
           <div className="bg-[#111418] border border-red-900/20 p-8 rounded-[3rem] shadow-xl">
