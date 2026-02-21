@@ -223,12 +223,61 @@ export default function Dashboard() {
     }
   };
 
+  const speakEventsForDate = (date: Date) => {
+    // determine relative label (วันนี้/พรุ่งนี้/มะรืนนี้/หรือวันที่ dd)
+    const now = new Date();
+    const toYMD = (d: Date) => d.toISOString().slice(0, 10);
+    let label = `วันที่ ${date.getDate()}`;
+    if (toYMD(date) === toYMD(now)) label = 'วันนี้';
+    else {
+      const tmr = new Date(now);
+      tmr.setDate(now.getDate() + 1);
+      if (toYMD(date) === toYMD(tmr)) label = 'พรุ่งนี้';
+      else {
+        const after = new Date(now);
+        after.setDate(now.getDate() + 2);
+        if (toYMD(date) === toYMD(after)) label = 'มะรืนนี้';
+      }
+    }
+
+    // filter by matching year-month-day
+    const targetYMD = toYMD(date);
+    const matches = events.filter(e => {
+      const ev = new Date(e.full_date);
+      return toYMD(ev) === targetYMD;
+    });
+
+    if (matches.length === 0) {
+      speak(`${label}ไม่มีนัด`);
+    } else {
+      const parts = matches.map(e => {
+        const ev = new Date(e.full_date);
+        const time = ev.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', hour12: false });
+        return `${e.title} เวลา ${time}`;
+      });
+      const prefix = `${label}คุณมีนัด${matches.length > 1 ? 'รายการดังนี้ ' : ' '}`;
+      speak(prefix + parts.join(' และ '));
+    }
+  };
+
   const handleVoiceCommand = (text: string) => {
     const t = text.toLowerCase();
     if (t.includes("ลบ") || t.includes("ยกเลิก")) {
       deleteGoogleEvent(text);
     } else if (t.includes("มีนัด") || t.includes("นัดอะไร") || t.includes("เช็ค")) {
-      /* logic check */
+      // if the phrase contains a date word, parse it
+      if (t.includes("วันนี้") || t.includes("พรุ่งนี้") || t.includes("มะรืน") || /\d/.test(t)) {
+        const { targetDate } = parseDateTime(text);
+        speakEventsForDate(targetDate);
+      } else {
+        // no specific date, return upcoming event(s)
+        if (events.length === 0) {
+          speak("ยังไม่มีนัดหมาย");
+        } else {
+          const next = events[0];
+          speak(`นัดถัดไปคือ ${next.title} เวลา ${next.event_time}`);
+        }
+      }
     } else if (t.includes("เพิ่ม") || t.includes("จอง") || t.includes("นัด")) {
       addGoogleEvent(text);
     } else if (t.includes("อากาศ") || t.includes("วิเคราะห์")) {
