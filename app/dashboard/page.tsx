@@ -13,6 +13,9 @@ export default function Dashboard() {
   const [googleToken, setGoogleToken] = useState<string | null>(null);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceSupported, setVoiceSupported] = useState(false);
+  // manual command fallback for platforms without recognition
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [manualCommand, setManualCommand] = useState("");
   const router = useRouter();
 
   // 🔑 Google OAuth Logic
@@ -288,21 +291,20 @@ export default function Dashboard() {
   const startListening = () => {
     const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!Recognition) {
-      // browser doesn’t support speech recognition (e.g. Safari on Mac/iOS).
-      // fall back to a simple text prompt so the app still works everywhere.
-      const typed = window.prompt("ดูเหมือนเบราว์เซอร์ของคุณไม่รองรับการพูด ถ้าต้องการสั่งงาน ให้พิมพ์คำสั่งลงไป:");
-      if (typed) handleVoiceCommand(typed);
+      setShowManualInput(true);
       return;
     }
-    const rec = new Recognition();
-    rec.lang = "th-TH";
-    rec.onresult = (e: any) => handleVoiceCommand(e.results[0][0].transcript);
-    rec.onerror = () => {
-      // if recognition fails, let user type instead
-      const fallback = window.prompt("เกิดข้อผิดพลาดในการฟังเสียง โปรดพิมพ์คำสั่งแทน:");
-      if (fallback) handleVoiceCommand(fallback);
-    };
-    rec.start();
+    try {
+      const rec = new Recognition();
+      rec.lang = "th-TH";
+      rec.onresult = (e: any) => handleVoiceCommand(e.results[0][0].transcript);
+      rec.onerror = () => {
+        setShowManualInput(true);
+      };
+      rec.start();
+    } catch (err) {
+      setShowManualInput(true);
+    }
   };
 
   const handleAnalyze = async () => {
@@ -396,16 +398,50 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {showManualInput && (
+            <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center p-4">
+              <div className="bg-[#111418] p-6 rounded-lg w-full max-w-md">
+                <h2 className="text-white text-xl mb-4">พิมพ์คำสั่งของคุณ</h2>
+                <input
+                  type="text"
+                  value={manualCommand}
+                  onChange={e => setManualCommand(e.target.value)}
+                  className="w-full p-3 rounded border border-white/20 bg-[#0f1216] text-white"
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      handleVoiceCommand(manualCommand);
+                      setManualCommand('');
+                      setShowManualInput(false);
+                    }
+                  }}
+                  autoFocus
+                />
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    onClick={() => { setManualCommand(''); setShowManualInput(false); }}
+                    className="px-4 py-2 bg-gray-600 rounded"
+                  >ยกเลิก</button>
+                  <button
+                    onClick={() => {
+                      handleVoiceCommand(manualCommand);
+                      setManualCommand('');
+                      setShowManualInput(false);
+                    }}
+                    className="px-4 py-2 bg-red-600 rounded text-white"
+                  >ส่ง</button>
+                </div>
+              </div>
+            </div>
+          )}
           <button
             onClick={startListening}
-            disabled={!voiceSupported}
-            className={`w-full py-10 rounded-[3rem] text-2xl font-black shadow-[0_20px_40px_rgba(220,38,38,0.3)] active:scale-95 transition-all flex items-center justify-center gap-4 border-b-4 border-red-800 ${voiceSupported ? 'bg-gradient-to-r from-red-600 to-red-700' : 'bg-gray-600 cursor-not-allowed'}`}
-            title={voiceSupported ? 'พูดกับ TrueX' : 'เบราว์เซอร์ไม่รองรับการสั่งด้วยเสียง'}
+            className={`w-full py-10 rounded-[3rem] text-2xl font-black shadow-[0_20px_40px_rgba(220,38,38,0.3)] active:scale-95 transition-all flex items-center justify-center gap-4 border-b-4 border-red-800 ${voiceSupported ? 'bg-gradient-to-r from-red-600 to-red-700' : 'bg-gray-600'}`}
+            title={voiceSupported ? 'พูดกับ TrueX' : 'ใช้ปุ่มนี้เพื่อตั้งคำสั่งข้อความ'}
           >
-            <span className="text-4xl">🎙️</span> {voiceSupported ? 'พูดกับ TrueX' : 'สั่งด้วยข้อความได้'}
+            <span className="text-4xl">🎙️</span> {voiceSupported ? 'พูดกับ TrueX' : 'พิมพ์คำสั่ง'}
           </button>
 
-          <div className="bg-[#111418] border border-red-900/20 p-8 rounded-[3rem] shadow-xl">
+          <div className="bg-[#111418] border border-red-900/20 p-8 rounded-[3rem] shadow-xl relative">
             <div className="flex justify-between items-center mb-6 border-b border-red-900/20 pb-4">
               <h3 className="text-red-400 uppercase text-[10px] font-black tracking-widest">Upcoming Schedule</h3>
             </div>
