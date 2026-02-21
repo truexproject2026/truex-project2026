@@ -1,237 +1,228 @@
 'use client';
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 
 export default function Dashboard() {
-  const [name, setName] = useState("");
   const [aqi, setAqi] = useState(0);
   const [aiAdvice, setAiAdvice] = useState("กดปุ่มด้านล่างเพื่อให้ TrueX AI เริ่มวิเคราะห์ข้อมูลครับ");
   const [isLoading, setIsLoading] = useState(false);
-  const [currentTime, setCurrentTime] = useState(new Date());
-  const [weather, setWeather] = useState({ 
-    temp: "--", desc: "Loading...", city: "Searching...", hourlyForecast: [] 
-  });
-  const [aqiHourly, setAqiHourly] = useState<any[]>([]); 
+  const [weather, setWeather] = useState({ temp: "--", desc: "Loading...", city: "กำลังระบุตำแหน่ง..." });
+  const [location, setLocation] = useState({ lat: null as number | null, lon: null as number | null });
   const [isMounted, setIsMounted] = useState(false);
-  const router = useRouter();
   const [events, setEvents] = useState<any[]>([]);
+  const [googleToken, setGoogleToken] = useState<string | null>(null);
+  const router = useRouter();
 
-  const notifiedRef = useRef<string[]>([]);
-
-  /* ================= LOGOUT FUNCTION ================= */
-  const handleLogout = () => {
-    localStorage.removeItem('userName'); 
-    router.push('/login'); 
+  const syncGoogleCalendar = () => {
+    const client_id = "590721730112-l6g9a44d5hl8nm7sbe3p71l2r3g45n56.apps.googleusercontent.com";
+    const redirect_uri = window.location.origin + "/dashboard";
+    const scope = "openid email profile https://www.googleapis.com/auth/calendar.events";
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${client_id}&redirect_uri=${redirect_uri}&response_type=token&scope=${encodeURIComponent(scope)}&prompt=consent`;
+    window.location.href = authUrl;
   };
 
-  /* ================= SPEAK FUNCTION (MOBILE FIX) ================= */
+  const fetchGoogleEvents = useCallback(async (token: string) => {
+    try {
+      const res = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${new Date().toISOString()}&maxResults=5&singleEvents=true&orderBy=startTime`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const data = await res.json();
+      if (data.items) {
+        setEvents(data.items.map((item: any) => ({
+          id: item.id,
+          title: item.summary,
+          event_time: item.start.dateTime ? new Date(item.start.dateTime).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', hour12: false }) : "All Day"
+        })));
+      }
+    } catch (err) { console.error(err); }
+  }, []);
+
   const speak = (text: string) => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (typeof window === "undefined") return;
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    const thaiVoice = voices.find(v => v.name.includes("Google") && v.lang.includes("th")) || 
-                     voices.find(v => v.lang.includes("th"));
-    if (thaiVoice) utterance.voice = thaiVoice;
-    utterance.lang = "th-TH";
-    utterance.rate = 1.0; 
-    utterance.pitch = 1.1; 
-    window.speechSynthesis.speak(utterance);
+    const ut = new SpeechSynthesisUtterance(text);
+    ut.lang = "th-TH";
+    window.speechSynthesis.speak(ut);
   };
 
-  /* ================= AUTO REMINDER ================= */
-  const checkAutoReminders = useCallback(() => {
-    const now = new Date();
-    events.forEach(event => {
-      const [y, m, d] = event.event_date.split("-").map(Number);
-      const [h, min] = event.event_time.split(":").map(Number);
-      const eventTime = new Date(y, m - 1, d, h, min);
-      const diffMins = Math.ceil((eventTime.getTime() - now.getTime()) / 60000);
-
-      const alertPoints = [30, 20, 10, 5];
-      if (alertPoints.includes(diffMins)) {
-        const notifyKey = `${event.id}-${diffMins}`;
-        if (!notifiedRef.current.includes(notifyKey)) {
-          speak(`ขออนุญาตแจ้งเตือนครับคุณ ${name} อีกประมาณ ${diffMins} นาที จะถึงนัดเรื่อง ${event.title} ครับ`);
-          notifiedRef.current.push(notifyKey);
-        }
-      }
+  /* ================= 🛠️ FIXED: ฟังก์ชันเพิ่มนัด (ดึงเวลาจริง) ================= */
+  const addGoogleEvent = async (text: string) => {
+    if (!googleToken) return speak("กรุณาล็อกอินกูเกิลก่อนค่ะ");
+    
+    let t = text.replace(/\s+/g, "");
+    const thaiNumMap: { [key: string]: string } = {
+      "หนึ่ง": "1", "สอง": "2", "สาม": "3", "สี่": "4", "ห้า": "5",
+      "หก": "6", "เจ็ด": "7", "แปด": "8", "เก้า": "9", "สิบ": "10"
+    };
+    Object.keys(thaiNumMap).forEach(key => {
+      t = t.replace(new RegExp(key, 'g'), thaiNumMap[key]);
     });
-  }, [events, name]);
 
-  /* ================= FETCH DATA ================= */
-  const fetchEvents = useCallback(async () => {
-    try {
-      const res = await fetch('/api/events', { method: 'GET', cache: 'no-store' });
-      const d = await res.json();
-      setEvents(d.events || []);
-    } catch (err) { console.error(err); }
-  }, []);
+    let now = new Date();
+    let year = now.getFullYear();
+    let month = now.getMonth();
+    let date = now.getDate();
+    let hour = -1;
 
-  const fetchData = useCallback(async (lat: number = 13.75, lon: number = 100.50) => {
-    try {
-      const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
-      const data = await res.json();
-      setWeather({ temp: data.temp?.toString() || "--", desc: data.desc || "-", city: data.city || "Bangkok", hourlyForecast: data.aqiHourly || [] });
-      setAqi(data.aqi || 0);
-      setAqiHourly(data.aqiHourly || []);
-    } catch (err) { console.error(err); }
-  }, []);
-
-  const handleAnalyze = async (isVoice: boolean = false) => {
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aqi, temp: weather.temp, desc: weather.desc, aqiHourly, weatherHourly: weather.hourlyForecast }),
-      });
-      const data = await res.json();
-      setAiAdvice(data.analysis || "วิเคราะห์เสร็จสิ้นครับ");
-      if (isVoice) speak(data.analysis);
-    } catch { setAiAdvice("ขออภัย ระบบ AI ขัดข้อง"); }
-    finally { setIsLoading(false); }
-  };
-
-  /* ================= VOICE & LISTEN ================= */
-  const parseThaiTime = (text: string) => {
-    let t = text.replace(/ครับ|ค่ะ|นะ|หน่อย|ที|ให้หน่อย/gi, "").replace(/\s+/g, "");
-    let hour: number | null = null;
-    let minute: number = 0;
-    const digitalMatch = t.match(/(\d{1,2})[:.](\d{2})/);
-    if (digitalMatch) {
-      hour = parseInt(digitalMatch[1]);
-      minute = parseInt(digitalMatch[2]);
-    } else {
-      const hourMatch = t.match(/(\d+)(โมง|ทุ่ม|ตี|บ่าย)/);
-      if (hourMatch) {
-        let num = parseInt(hourMatch[1]);
-        let type = hourMatch[2];
-        if (type === "ทุ่ม") hour = num + 18;
-        else if (type === "ตี") hour = num;
-        else if (type === "บ่าย") hour = num + 12;
-        else if (type === "โมง") hour = num <= 6 ? num + 12 : num;
-        const afterText = t.split(type)[1];
-        const minMatch = afterText ? afterText.match(/^(\d+)/) : null;
-        if (minMatch) minute = parseInt(minMatch[1]);
-      }
+    // Logic แกะเวลาจากคำพูด
+    if (t.includes("ตี")) {
+      const m = t.match(/ตี(\d+)/);
+      if (m) { hour = parseInt(m[1]); if (now.getHours() >= 12) date += 1; }
+    } else if (t.includes("ทุ่ม")) {
+      const m = t.match(/(\d+)ทุ่ม/);
+      if (m) hour = parseInt(m[1]) + 18;
+    } else if (t.includes("บ่าย")) {
+      const m = t.match(/บ่าย(\d+)/);
+      if (m) hour = parseInt(m[1]) + 12;
+      else if (t.includes("บ่ายโมง")) hour = 13;
+    } else if (t.includes("โมงเย็น")) {
+      const m = t.match(/(\d+)โมงเย็น/);
+      if (m) hour = parseInt(m[1]) + 12;
+    } else if (t.includes("โมงเช้า") || (t.includes("โมง") && !t.includes("บ่าย") && !t.includes("เย็น"))) {
+      const m = t.match(/(\d+)โมง/);
+      if (m) hour = parseInt(m[1]);
     }
-    return hour !== null ? `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}:00` : null;
+
+    // Fallback ถ้าหาเลขไม่เจอ
+    if (hour === -1) {
+      const num = t.match(/(\d+)/);
+      if (num) hour = parseInt(num[1]) < 7 ? parseInt(num[1]) + 12 : parseInt(num[1]);
+      else return speak("กรุณาบอกเวลาให้ชัดเจนด้วยค่ะ");
+    }
+
+    const cleanTitle = text.replace(/เพิ่มนัด|จอง|ตอน|ตี|ทุ่ม|บ่าย|โมงเย็น|โมงเช้า|โมง|[0-9]|หนึ่ง|สอง|สาม|สี่|ห้า|หก|เจ็ด|แปด|เก้า|สิบ/g, "").trim();
+
+    try {
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const startTimeISO = `${year}-${pad(month + 1)}-${pad(date)}T${pad(hour)}:00:00+07:00`;
+      const endTimeISO = `${year}-${pad(month + 1)}-${pad(date)}T${pad(hour + 1)}:00:00+07:00`;
+
+      const res = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${googleToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          summary: cleanTitle || "นัดหมาย TrueX",
+          start: { dateTime: startTimeISO, timeZone: "Asia/Bangkok" },
+          end: { dateTime: endTimeISO, timeZone: "Asia/Bangkok" }
+        }),
+      });
+
+      if (res.ok) {
+        speak(`เพิ่มนัดหมาย ${cleanTitle || ""} เรียบร้อยแล้วค่ะ`);
+        fetchGoogleEvents(googleToken);
+      }
+    } catch (err) { speak("บันทึกไม่สำเร็จค่ะ"); }
   };
 
   const handleVoiceCommand = (text: string) => {
-    const lowerText = text.toLowerCase().trim();
-    if (lowerText.includes("สวัสดี")) { speak(`สวัสดีครับคุณ ${name} มีอะไรให้ช่วยไหมครับ?`); return; }
-    if (lowerText.includes("อากาศ")) { handleAnalyze(true); return; }
-    if (lowerText.includes("เพิ่มนัด") || (lowerText.includes("นัด") && !lowerText.includes("นัดอะไรบ้าง"))) {
-      const time = parseThaiTime(lowerText);
-      let cleanTitle = lowerText.replace(/เพิ่มนัด|นัด|จอง|ตอนบ่าย|บ่าย|ตอน/gi, "").replace(/\d{1,2}[:.]\d{2}/g, "").replace(/\d+/g, "").replace(/นาฬิกา|นาที|โมง|ทุ่ม|ตี/gi, "").replace(/\s+[น]\.?\s*$/g, "").replace(/[น]\.?$/g, "").trim();
-      if (time && cleanTitle) {
-        fetch("/api/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: cleanTitle, event_date: new Date().toISOString().split("T")[0], event_time: time }) }).then(async () => {
-          const [h, m] = time.split(':');
-          speak(`บันทึกนัด ${cleanTitle} ตอน ${parseInt(h)} นาฬิกา ${parseInt(m)} นาที เรียบร้อยครับ`);
-          await fetchEvents();
-        });
-      }
-      return;
+    const t = text.toLowerCase();
+    if (t.includes("เพิ่มนัด") || t.includes("จอง")) {
+      addGoogleEvent(text);
+    } else if (t.includes("มีนัด") || t.includes("เช็ค")) {
+      const titles = events.map(e => e.title).join(", ");
+      speak(titles ? `วันนี้นัดหมายของคุณมี ${titles} ค่ะ` : "ยังไม่มีนัดหมายค่ะ");
+    } else if (t.includes("อากาศ") || t.includes("วิเคราะห์")) {
+      handleAnalyze();
     }
   };
 
   const startListening = () => {
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.speak(new SpeechSynthesisUtterance("")); // Unlock Audio
-    }
     const Recognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!Recognition) return;
+    if (!Recognition) return alert("ไม่รองรับเสียง");
     const rec = new Recognition();
     rec.lang = "th-TH";
     rec.onresult = (e: any) => handleVoiceCommand(e.results[0][0].transcript);
     rec.start();
   };
 
-  /* ================= EFFECTS ================= */
+  const handleAnalyze = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aqi, temp: weather.temp, desc: weather.desc, nextEvent: events[0]?.title }),
+      });
+      const data = await res.json();
+      setAiAdvice(data.analysis);
+      speak(data.analysis);
+    } catch { setAiAdvice("ระบบขัดข้อง"); }
+    finally { setIsLoading(false); }
+  };
+
   useEffect(() => {
     setIsMounted(true);
-    const timer = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(now);
-      if (now.getSeconds() === 0) checkAutoReminders();
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [checkAutoReminders]);
+    const hash = window.location.hash;
+    if (hash) {
+      const params = new URLSearchParams(hash.replace('#', '?'));
+      const token = params.get('access_token');
+      if (token) { setGoogleToken(token); fetchGoogleEvents(token); window.history.replaceState(null, "", window.location.pathname); }
+    }
 
-  useEffect(() => {
-    if (!isMounted) return;
-    setName(localStorage.getItem('userName') || "User");
-    fetchEvents();
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(p => fetchData(p.coords.latitude, p.coords.longitude), () => fetchData());
-    } else fetchData();
-  }, [isMounted, fetchData, fetchEvents]);
-
-  const formattedTime = useMemo(() => currentTime.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }), [currentTime]);
-
-  const upcomingEventsList = useMemo(() => {
-    const now = new Date();
-    const buffer = now.getTime() - 300000; 
-    return events
-      .map(e => {
-        const [y, m, d] = e.event_date.split("-").map(Number);
-        const [h, min] = e.event_time.split(":").map(Number);
-        return { ...e, fullDateTime: new Date(y, m - 1, d, h, min) };
-      })
-      .filter(e => e.fullDateTime.getTime() > buffer)
-      .sort((a, b) => a.fullDateTime.getTime() - b.fullDateTime.getTime());
-  }, [events, currentTime]);
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(async (position) => {
+        const { latitude, longitude } = position.coords;
+        setLocation({ lat: latitude, lon: longitude });
+        try {
+          const res = await fetch(`/api/weather?lat=${latitude}&lon=${longitude}`);
+          const d = await res.json();
+          setWeather({ temp: d.temp, desc: d.desc, city: d.city || "Bangkok" });
+          setAqi(d.aqi);
+        } catch (err) { console.error(err); }
+      });
+    }
+  }, [fetchGoogleEvents]);
 
   if (!isMounted) return null;
 
   return (
-    <div className="min-h-screen bg-[#0c0f14] font-sans text-white transition-all duration-500">
-      {/* Navigation: Responsive Padding */}
-      <nav className="sticky top-0 z-30 flex flex-wrap items-center justify-between border-b border-red-900/30 bg-[#0f1720]/90 p-3 md:p-4 backdrop-blur-xl gap-3">
-        <div className="flex items-center gap-3 md:gap-6">
-          <h1 className="text-xl md:text-2xl font-black italic text-red-500">TrueX</h1>
-          <div className="hidden sm:flex border-l border-red-900/30 pl-4 md:pl-6 gap-4 text-[10px] md:text-xs font-bold">
-            <div className="flex flex-col"><span className="text-red-400 uppercase">{weather.city}</span>{weather.temp}°C • {weather.desc}</div>
-            <div className="flex flex-col border-l border-red-900/30 pl-4 uppercase italic text-red-400">Live Time<span className="text-white/90">{formattedTime}</span></div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 md:gap-4">
-          <button onClick={startListening} className="rounded-lg md:rounded-xl border border-red-500 bg-black px-3 py-2 md:px-6 md:py-3 text-sm md:text-base text-red-500 hover:bg-red-600 hover:text-white transition-all">🎙 พูด</button>
-          <button onClick={handleLogout} className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 md:px-4 md:py-2 rounded-lg text-[10px] md:text-xs font-bold transition-all uppercase">Logout</button>
+    <div className="min-h-screen bg-[#0c0f14] text-white font-sans">
+      <nav className="flex items-center justify-between p-4 border-b border-red-900/30 bg-[#0f1720]/90 sticky top-0 z-50">
+        <h1 className="text-2xl font-black italic text-red-500 uppercase tracking-tighter">TrueX</h1>
+        <div className="flex gap-2">
+          <button onClick={syncGoogleCalendar} className="bg-white/10 border border-white/20 px-3 py-2 rounded-lg text-[10px] font-bold tracking-widest uppercase">{googleToken ? "🔄 Sync Live" : "🔑 Login Google"}</button>
+          <button onClick={startListening} className="border border-red-500 text-red-500 px-4 py-2 rounded-lg text-[10px] font-bold transition-all hover:bg-red-500 hover:text-white uppercase tracking-widest">🎙 พูด</button>
+          <button onClick={() => router.push('/login')} className="bg-red-600 px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest">Logout</button>
         </div>
       </nav>
 
-      {/* Main Content: Responsive Grid */}
-      <main className="mx-auto max-w-6xl grid grid-cols-1 md:grid-cols-3 gap-6 p-4 md:p-10">
+      <main className="max-w-6xl mx-auto p-10 grid grid-cols-1 md:grid-cols-3 gap-8">
         <div className="md:col-span-2 space-y-6">
-          {/* AQI Card:ขยายเต็มจอในมือถือ */}
-          <div className="p-6 md:p-10 rounded-[1.5rem] md:rounded-[2rem] border border-red-900/20 bg-slate-900/20 relative overflow-hidden">
-            <div className="absolute right-0 top-0 h-full w-1 md:w-2 bg-red-500"></div>
-            <h2 className="mb-2 md:mb-4 text-[10px] font-semibold italic uppercase tracking-widest text-red-400">Live Air Quality</h2>
-            <div className="flex items-baseline gap-4">
-              <span className="text-6xl md:text-8xl font-black text-red-500">{aqi}</span>
-              <span className="text-sm md:text-xl font-bold text-red-500 italic uppercase">Warning</span>
+          <div className="p-8 rounded-[2rem] bg-gradient-to-br from-red-900/20 via-slate-900/40 to-transparent border border-red-900/30 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-2 h-2 rounded-full bg-red-500 animate-ping"></div>
+              <p className="text-red-400 uppercase text-[10px] font-black tracking-[0.2em]">Live Location Intelligence</p>
+            </div>
+            <h2 className="text-4xl font-black text-white mb-2">{weather.city}</h2>
+            <p className="text-white/30 text-xs font-mono tracking-tighter">LAT: {location.lat?.toFixed(5)} / LON: {location.lon?.toFixed(5)}</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div className="p-10 rounded-[3rem] border border-red-900/20 bg-[#111418] relative overflow-hidden group">
+              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity"><svg width="80" height="80" viewBox="0 0 24 24" fill="red"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg></div>
+              <p className="text-red-400 uppercase text-[10px] font-black mb-2 tracking-widest">Air Quality Index</p>
+              <h2 className="text-8xl font-black text-red-500 tracking-tighter">{aqi}</h2>
+            </div>
+            <div className="p-10 rounded-[3rem] border border-white/5 bg-[#111418] flex flex-col justify-center relative overflow-hidden group">
+              <p className="text-white/40 uppercase text-[10px] font-black mb-2 tracking-widest">Current Weather</p>
+              <h2 className="text-6xl font-black text-white tracking-tighter">{weather.temp}°C</h2>
+              <p className="text-red-500/80 mt-2 font-bold uppercase text-xs tracking-widest">{weather.desc}</p>
             </div>
           </div>
 
-          <button onClick={() => handleAnalyze()} disabled={isLoading} className="w-full rounded-[1.2rem] md:rounded-[1.5rem] bg-gradient-to-r from-red-700 to-red-600 p-6 md:p-8 text-lg md:text-xl font-black shadow-xl active:scale-95 transition-all">
-            {isLoading ? "ANALYZING..." : "ANALYZE WITH AI"}
+          <button onClick={handleAnalyze} disabled={isLoading} className="w-full bg-red-600 hover:bg-red-500 py-10 rounded-[3rem] text-3xl font-black shadow-[0_20px_50px_rgba(220,38,38,0.3)] active:scale-[0.98] transition-all uppercase tracking-tighter italic">
+            {isLoading ? "Analyzing Data..." : "Execute AI Analysis"}
           </button>
 
-          {/* Table Container: Scrollable on mobile */}
-          <div className="bg-[#111418] p-6 md:p-8 rounded-[1.2rem] md:rounded-[1.5rem] border border-red-900/30 shadow-lg">
-            <h3 className="mb-6 text-xs md:text-sm italic uppercase text-red-400 tracking-widest">Schedule</h3>
-            <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-              {upcomingEventsList.length === 0 ? <p className="text-sm text-white/50 italic text-center">ไม่มีนัดหมาย</p> : 
-                upcomingEventsList.map(e => (
-                  <div key={e.id} className="p-4 md:p-5 bg-black/40 rounded-xl md:rounded-2xl border border-red-800/20 flex justify-between items-center group hover:border-red-500 transition-all">
-                    <div className="flex-1 min-w-0 mr-4">
-                      <p className="font-bold text-sm md:text-lg text-white group-hover:text-red-400 transition-colors truncate">{e.title}</p>
-                      <p className="text-[10px] text-white/40 uppercase tracking-widest">{e.event_date}</p>
-                    </div>
-                    <span className="text-red-400 font-bold bg-red-950/30 px-3 py-1 rounded-lg text-xs md:text-sm whitespace-nowrap">{e.event_time}</span>
+          <div className="bg-[#111418] border border-red-900/20 p-10 rounded-[3rem] shadow-inner">
+            <h3 className="text-red-400 uppercase text-[10px] font-black mb-8 tracking-[0.3em] border-b border-red-900/20 pb-4">Upcoming Schedule</h3>
+            <div className="space-y-4">
+              {events.length === 0 ? <p className="text-center italic text-white/10 py-10 tracking-widest uppercase text-xs">No active events found</p> :
+                events.map(e => (
+                  <div key={e.id} className="p-6 bg-white/5 rounded-[2rem] border border-white/5 flex justify-between items-center group hover:bg-red-600/10 hover:border-red-500/50 transition-all cursor-pointer">
+                    <p className="font-bold text-xl text-white/80 group-hover:text-white transition-colors">{e.title}</p>
+                    <div className="bg-red-600/20 text-red-500 px-6 py-3 rounded-2xl font-black text-xs tracking-widest">{e.event_time}</div>
                   </div>
                 ))
               }
@@ -239,12 +230,15 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Insight: จะมาอยู่ด้านล่างสุดในมือถือ */}
-        <div className="rounded-[1.5rem] md:rounded-[2rem] border border-red-900/30 bg-gradient-to-br from-[#111418] to-[#0f0f12] p-6 md:p-10 text-white shadow-xl min-h-[300px] md:min-h-[420px] relative overflow-hidden self-start">
-          <div className="text-4xl md:text-6xl opacity-5 text-red-500 italic font-serif">“</div>
-          <div className="z-10 relative">
-            <h3 className="mb-3 border-b border-red-900/40 pb-3 text-[10px] md:text-xs font-semibold italic text-red-400 uppercase">TrueX Smart Insight</h3>
-            <p className="mt-4 text-base md:text-xl font-medium leading-relaxed text-white/90">{aiAdvice}</p>
+        <div className="bg-[#0f1216] border border-red-900/30 p-10 rounded-[3rem] self-start sticky top-28 shadow-2xl backdrop-blur-xl">
+          <div className="flex items-center gap-2 mb-8 border-b border-red-900/20 pb-4">
+            <div className="w-3 h-3 bg-red-600 rounded-full"></div>
+            <h3 className="text-red-500 text-[10px] font-black uppercase tracking-[0.2em]">TrueX Core Intelligence</h3>
+          </div>
+          <p className="text-2xl leading-relaxed font-medium italic text-white/80">“{aiAdvice}”</p>
+          <div className="mt-10 pt-6 border-t border-white/5 flex justify-between items-center">
+            <span className="text-[10px] text-white/20 font-bold uppercase">System Status</span>
+            <span className="text-[10px] text-green-500 font-bold uppercase tracking-widest">Optimal</span>
           </div>
         </div>
       </main>

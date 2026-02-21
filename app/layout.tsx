@@ -4,13 +4,11 @@ import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
 
-// ⚡ นี่คือส่วนสำคัญที่ทำให้ส่งลิงก์แล้วมีรูปพรีวิวสวยๆ
 export const metadata: Metadata = {
   title: "TrueX | Smart Home IoT Dashboard",
   description: "สัมผัสประสบการณ์การใช้ชีวิตอัจฉริยะ วิเคราะห์สภาพอากาศและพลังงานด้วย TrueX AI",
-  metadataBase: new URL('https://truex-iot-dashboard.vercel.app'), // ใส่ URL เว็บคุณเพื่อให้ Next.js หาที่อยู่รูปเจอ
+  metadataBase: new URL('https://truex-iot-dashboard.vercel.app'),
   
-  // 🌐 ส่วนของ Facebook, Line, Discord
   openGraph: {
     title: "TrueX | Smart Home IoT Dashboard",
     description: "ระบบจัดการบ้านอัจฉริยะ วิเคราะห์สภาพอากาศและประหยัดพลังงานแบบ Real-time",
@@ -18,7 +16,7 @@ export const metadata: Metadata = {
     siteName: "TrueX Smart Living",
     images: [
       {
-        url: "/opengraph-image.jpg", // ⚡ ต้องมีไฟล์ชื่อนี้วางอยู่ในโฟลเดอร์ app/ นะครับ
+        url: "/opengraph-image.jpg",
         width: 1200,
         height: 630,
         alt: "TrueX Smart Home Dashboard Preview",
@@ -28,7 +26,6 @@ export const metadata: Metadata = {
     type: "website",
   },
 
-  // 🐦 ส่วนของ X (Twitter)
   twitter: {
     card: "summary_large_image",
     title: "TrueX | Smart Home IoT Dashboard",
@@ -44,7 +41,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="th">
-      <body className={inter.className}>{children}</body>
+      <body className={inter.className}>
+        {/* ⚡ ลบ AuthProvider ออกแล้ว เพื่อล้าง Error CLIENT_FETCH_ERROR */}
+        {children}
+      </body>
     </html>
   );
 }
