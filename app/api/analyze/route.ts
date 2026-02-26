@@ -1,7 +1,8 @@
+export const runtime = "nodejs";
 import { InferenceClient } from "@huggingface/inference";
 import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
+
 
 const hfToken = process.env.HF_TOKEN;
 
