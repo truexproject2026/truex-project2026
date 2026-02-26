@@ -141,8 +141,13 @@ export async function GET(req: Request) {
        📅 5 Day Forecast
     ========================== */
 
-    const dailyForecast: ForecastDay[] =
-      forecastData.list
+      const dailyForecast: {
+        date: string;
+        temp: number;
+        desc: string;
+        rain: number;
+      }[] =
+        forecastData.list
         ?.filter((_, index) => index % 8 === 0)
         .slice(0, 5)
         .map((item): ForecastDay => ({
