@@ -1,5 +1,71 @@
 export const runtime = "edge";
+
 import { NextResponse } from "next/server";
+
+/* =========================
+   📦 Types
+========================= */
+
+type WeatherResponse = {
+  main?: { temp: number };
+  weather?: { description: string }[];
+  name?: string;
+};
+
+type PollutionResponse = {
+  list?: {
+    components?: {
+      pm2_5?: number;
+    };
+  }[];
+};
+
+type PollutionForecastResponse = {
+  list?: {
+    dt: number;
+    components: {
+      pm2_5: number;
+    };
+  }[];
+};
+
+type GeoResponse = {
+  name?: string;
+  local_names?: {
+    th?: string;
+  };
+}[];
+
+type ForecastItem = {
+  dt: number;
+  main: {
+    temp: number;
+  };
+  weather: {
+    description: string;
+  }[];
+  pop?: number;
+};
+
+type ForecastResponse = {
+  list?: ForecastItem[];
+};
+
+type ForecastDay = {
+  date: string;
+  temp: number;
+  desc: string;
+  rain: number;
+};
+
+type AQIHourly = {
+  time: string;
+  pm25: number;
+};
+
+/* =========================
+   🚀 Handler
+========================= */
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -47,17 +113,18 @@ export async function GET(req: Request) {
       ),
     ]);
 
-    const wData = await weatherRes.json();
-    const pData = await pollutionRes.json();
-    const pfData = await pollutionForecastRes.json();
-    const geoData = await geoRes.json();
-    const forecastData = await forecastRes.json();
+    const wData: WeatherResponse = await weatherRes.json();
+    const pData: PollutionResponse = await pollutionRes.json();
+    const pfData: PollutionForecastResponse =
+      await pollutionForecastRes.json();
+    const geoData: GeoResponse = await geoRes.json();
+    const forecastData: ForecastResponse = await forecastRes.json();
 
     /* =========================
        📍 LOCATION
     ========================== */
 
-    let areaName =
+    const areaName =
       geoData?.[0]?.local_names?.th ||
       geoData?.[0]?.name ||
       wData.name ||
@@ -67,46 +134,47 @@ export async function GET(req: Request) {
        🌫 AQI
     ========================== */
 
-    const pm25 = pData.list?.[0]?.components?.pm2_5 || 0;
-    let displayAqi = Math.round(pm25 * 2);
+    const pm25 = pData.list?.[0]?.components?.pm2_5 ?? 0;
+    const displayAqi = Math.round(pm25 * 2);
 
     /* =========================
        📅 5 Day Forecast
     ========================== */
 
-    const dailyForecast =
+    const dailyForecast: ForecastDay[] =
       forecastData.list
-        ?.filter((_: any, index: number) => index % 8 === 0)
+        ?.filter((_, index) => index % 8 === 0)
         .slice(0, 5)
-        .map((item: any) => ({
+        .map((item): ForecastDay => ({
           date: new Date(item.dt * 1000).toLocaleDateString("th-TH"),
           temp: Math.round(item.main.temp),
-          desc: item.weather[0].description,
+          desc: item.weather[0]?.description ?? "ไม่มีข้อมูล",
           rain: item.pop ? Math.round(item.pop * 100) : 0,
-        })) || [];
+        })) ?? [];
 
     /* =========================
-       🏆 BEST DAY SCORE (0–100)
+       🏆 BEST DAY SCORE
     ========================== */
 
-    const scoredForecast = dailyForecast.map((d: any) => {
+    const scoredForecast = dailyForecast.map((d) => {
       let score = 100;
 
       if (d.temp > 37) score -= 25;
       if (d.rain > 60) score -= 30;
-      if (d.rain > 30) score -= 15;
+      else if (d.rain > 30) score -= 15;
 
       return { ...d, score };
     });
 
     const bestDay =
-      scoredForecast.sort((a: any, b: any) => b.score - a.score)[0] || null;
+      scoredForecast.sort((a, b) => b.score - a.score)[0] ?? null;
 
     /* =========================
-       📈 Temperature Trend (Slope)
+       📈 Temperature Trend
     ========================== */
 
     let tempSlope = 0;
+
     if (dailyForecast.length >= 2) {
       tempSlope =
         dailyForecast[dailyForecast.length - 1].temp -
@@ -137,14 +205,14 @@ export async function GET(req: Request) {
        ⏳ AQI Hourly
     ========================== */
 
-    const aqiHourly =
-      pfData.list?.slice(0, 12).map((item: any) => ({
+    const aqiHourly: AQIHourly[] =
+      pfData.list?.slice(0, 12).map((item) => ({
         time: new Date(item.dt * 1000).toLocaleTimeString("th-TH", {
           hour: "2-digit",
           minute: "2-digit",
         }),
         pm25: item.components.pm2_5,
-      })) || [];
+      })) ?? [];
 
     /* =========================
        📦 RESPONSE
@@ -152,9 +220,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       temp: wData.main ? Math.round(wData.main.temp) : 0,
-      desc: wData.weather
-        ? wData.weather[0].description
-        : "Unknown",
+      desc: wData.weather?.[0]?.description ?? "Unknown",
       city: areaName,
       aqi: displayAqi,
       aqiHourly,
@@ -167,8 +233,7 @@ export async function GET(req: Request) {
         bestDay,
       },
     });
-
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { message: "Internal Error" },
       { status: 500 }
