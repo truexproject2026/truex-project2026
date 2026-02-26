@@ -189,7 +189,7 @@ export async function GET(req: Request) {
        🌧 Rain Pattern
     ========================== */
 
-    const rainDays = dailyForecast.filter((d) => d.rain > 50).length;
+    const rainDays = dailyForecast.filter((d: any) => d.rain > 50).length;
 
     let rainPattern = "ฝนกระจาย";
     if (rainDays >= 2) rainPattern = "มีฝนหลายวันติด";
