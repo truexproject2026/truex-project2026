@@ -1,93 +1,40 @@
 export const runtime = "edge";
-
 import { NextResponse } from "next/server";
 
-/* =========================
-   📦 Types
-========================= */
-
-type WeatherResponse = {
-  main?: { temp: number };
-  weather?: { description: string }[];
-  name?: string;
-};
-
-type PollutionResponse = {
-  list?: {
-    components?: {
-      pm2_5?: number;
-    };
-  }[];
-};
-
-type PollutionForecastResponse = {
-  list?: {
-    dt: number;
-    components: {
-      pm2_5: number;
-    };
-  }[];
-};
-
-type GeoResponse = {
-  name?: string;
-  local_names?: {
-    th?: string;
-  };
-}[];
-
-type ForecastItem = {
-  dt: number;
-  main: {
-    temp: number;
-  };
-  weather: {
-    description: string;
-  }[];
-  pop?: number;
-};
-
-type ForecastResponse = {
-  list?: ForecastItem[];
-};
-
-type ForecastDay = {
-  date: string;
-  temp: number;
-  desc: string;
-  rain: number;
-};
-
-type AQIHourly = {
-  time: string;
-  pm25: number;
-};
-
-/* =========================
-   🚀 Handler
-========================= */
-
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const lat = searchParams.get("lat");
-  const lon = searchParams.get("lon");
-
-  if (!lat || !lon) {
-    return NextResponse.json(
-      { message: "Missing coordinates" },
-      { status: 400 }
-    );
-  }
-
   try {
-    const apiKey = process.env.OPENWEATHER_API_KEY;
+    const { searchParams } = new URL(req.url);
+    const lat = searchParams.get("lat");
+    const lon = searchParams.get("lon");
 
+    if (!lat || !lon) {
+      return NextResponse.json(
+        { message: "Missing coordinates" },
+        { status: 400 }
+      );
+    }
+
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lon);
+
+    if (isNaN(latitude) || isNaN(longitude)) {
+      return NextResponse.json(
+        { message: "Invalid coordinates" },
+        { status: 400 }
+      );
+    }
+
+    const apiKey = process.env.OPENWEATHER_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
         { message: "API key missing" },
         { status: 500 }
       );
     }
+
+    /* =========================
+       Fetch APIs (Parallel)
+    ========================== */
 
     const [
       weatherRes,
@@ -97,150 +44,136 @@ export async function GET(req: Request) {
       forecastRes,
     ] = await Promise.all([
       fetch(
-        `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${apiKey}`
+        `https://api.openweathermap.org/data/2.5/weather?lat=${latitude}&lon=${longitude}&units=metric&appid=${apiKey}`
       ),
       fetch(
-        `https://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=${apiKey}`
+        `https://api.openweathermap.org/data/2.5/air_pollution?lat=${latitude}&lon=${longitude}&appid=${apiKey}`
       ),
       fetch(
-        `https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat=${lat}&lon=${lon}&appid=${apiKey}`
+        `https://api.openweathermap.org/data/2.5/air_pollution/forecast?lat=${latitude}&lon=${longitude}&appid=${apiKey}`
       ),
       fetch(
-        `https://api.openweathermap.org/geo/1.0/reverse?lat=${lat}&lon=${lon}&limit=5&appid=${apiKey}`
+        `https://api.openweathermap.org/geo/1.0/reverse?lat=${latitude}&lon=${longitude}&limit=5&appid=${apiKey}`
       ),
       fetch(
-        `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&units=metric&appid=${apiKey}`
+        `https://api.openweathermap.org/data/2.5/forecast?lat=${latitude}&lon=${longitude}&units=metric&appid=${apiKey}`
       ),
     ]);
 
-    const wData: WeatherResponse = await weatherRes.json();
-    const pData: PollutionResponse = await pollutionRes.json();
-    const pfData: PollutionForecastResponse =
-      await pollutionForecastRes.json();
-    const geoData: GeoResponse = await geoRes.json();
-    const forecastData: ForecastResponse = await forecastRes.json();
-
-    /* =========================
-       📍 LOCATION
-    ========================== */
-
-    const areaName =
-      geoData?.[0]?.local_names?.th ||
-      geoData?.[0]?.name ||
-      wData.name ||
-      "Unknown Location";
-
-    /* =========================
-       🌫 AQI
-    ========================== */
-
-    const pm25 = pData.list?.[0]?.components?.pm2_5 ?? 0;
-    const displayAqi = Math.round(pm25 * 2);
-
-    /* =========================
-       📅 5 Day Forecast
-    ========================== */
-
-      const dailyForecast: {
-        date: string;
-        temp: number;
-        desc: string;
-        rain: number;
-      }[] =
-        forecastData.list
-        ?.filter((_, index) => index % 8 === 0)
-        .slice(0, 5)
-        .map((item): ForecastDay => ({
-          date: new Date(item.dt * 1000).toLocaleDateString("th-TH"),
-          temp: Math.round(item.main.temp),
-          desc: item.weather[0]?.description ?? "ไม่มีข้อมูล",
-          rain: item.pop ? Math.round(item.pop * 100) : 0,
-        })) ?? [];
-
-    /* =========================
-       🏆 BEST DAY SCORE
-    ========================== */
-
-    const scoredForecast = dailyForecast.map((d) => {
-      let score = 100;
-
-      if (d.temp > 37) score -= 25;
-      if (d.rain > 60) score -= 30;
-      else if (d.rain > 30) score -= 15;
-
-      return { ...d, score };
-    });
-
-    const bestDay =
-      scoredForecast.sort((a, b) => b.score - a.score)[0] ?? null;
-
-    /* =========================
-       📈 Temperature Trend
-    ========================== */
-
-    let tempSlope = 0;
-
-    if (dailyForecast.length >= 2) {
-      tempSlope =
-        dailyForecast[dailyForecast.length - 1].temp -
-        dailyForecast[0].temp;
+    if (!weatherRes.ok || !pollutionRes.ok || !forecastRes.ok) {
+      return NextResponse.json(
+        { message: "Weather service unavailable" },
+        { status: 502 }
+      );
     }
 
-    let tempTrend = "คงที่";
-    if (tempSlope > 2) tempTrend = "ร้อนขึ้นต่อเนื่อง";
-    if (tempSlope < -2) tempTrend = "เย็นลงต่อเนื่อง";
+    const wData = await weatherRes.json();
+    const pData = await pollutionRes.json();
+    const pfData = await pollutionForecastRes.json();
+    const geoData = await geoRes.json();
+    const forecastData = await forecastRes.json();
 
     /* =========================
-       🌧 Rain Pattern
+       Force Rangsit–Khlong Luang
     ========================== */
 
-    const rainDays = dailyForecast.filter((d: any) => d.rain > 50).length;
+    const isRangsit =
+      latitude >= 13.98 &&
+      latitude <= 14.10 &&
+      longitude >= 100.48 &&
+      longitude <= 100.65;
 
-    let rainPattern = "ฝนกระจาย";
-    if (rainDays >= 2) rainPattern = "มีฝนหลายวันติด";
-    if (rainDays === 0) rainPattern = "แทบไม่มีฝน";
+    let areaName = "Unknown Location";
+
+    if (isRangsit) {
+      areaName = "รังสิต, คลองหลวง";
+    } else {
+      const district =
+        geoData?.find((g: any) => g.local_names?.th)?.local_names?.th ||
+        geoData?.[0]?.name ||
+        null;
+
+      const province =
+        geoData?.[0]?.state ||
+        wData?.name ||
+        null;
+
+      areaName =
+        district && province && district !== province
+          ? `${district}, ${province}`
+          : district || province || "Unknown Location";
+    }
 
     /* =========================
-       🔥 Hot Day Count
+       PM2.5 → US AQI Standard
     ========================== */
 
-    const hotDays = dailyForecast.filter((d) => d.temp > 35).length;
+    const pm25 = pData?.list?.[0]?.components?.pm2_5 ?? 0;
+
+    function calculateAQI(pm: number) {
+      if (pm <= 12)
+        return (50 / 12) * pm;
+      if (pm <= 35.4)
+        return ((100 - 51) / (35.4 - 12.1)) * (pm - 12.1) + 51;
+      if (pm <= 55.4)
+        return ((150 - 101) / (55.4 - 35.5)) * (pm - 35.5) + 101;
+      if (pm <= 150.4)
+        return ((200 - 151) / (150.4 - 55.5)) * (pm - 55.5) + 151;
+      return 300;
+    }
+
+    const displayAqi = Math.round(calculateAQI(pm25));
 
     /* =========================
-       ⏳ AQI Hourly
+       AQI Forecast (12 hr)
     ========================== */
 
-    const aqiHourly: AQIHourly[] =
-      pfData.list?.slice(0, 12).map((item) => ({
+    const aqiHourly =
+      pfData?.list?.slice(0, 12).map((item: any) => ({
         time: new Date(item.dt * 1000).toLocaleTimeString("th-TH", {
           hour: "2-digit",
           minute: "2-digit",
         }),
-        pm25: item.components.pm2_5,
-      })) ?? [];
+        pm25: item.components?.pm2_5 ?? 0,
+      })) || [];
 
     /* =========================
-       📦 RESPONSE
+       5-Day Weather Forecast
+    ========================== */
+
+    const dailyForecast =
+      forecastData?.list
+        ?.filter((item: any) =>
+          item.dt_txt.includes("12:00:00")
+        )
+        ?.slice(0, 5)
+        ?.map((item: any) => ({
+          date: item.dt_txt.split(" ")[0],
+          temp: Math.round(item.main.temp),
+          rain: item.pop
+            ? Math.round(item.pop * 100)
+            : 0,
+        })) || [];
+
+    /* =========================
+       Final Response
     ========================== */
 
     return NextResponse.json({
-      temp: wData.main ? Math.round(wData.main.temp) : 0,
-      desc: wData.weather?.[0]?.description ?? "Unknown",
+      temp: Math.round(wData?.main?.temp ?? 0),
+      desc: wData?.weather?.[0]?.description ?? "Unknown",
       city: areaName,
       aqi: displayAqi,
+      pm25,
       aqiHourly,
-      forecast: dailyForecast,
-      trend: {
-        hotDays,
-        rainDays,
-        tempTrend,
-        rainPattern,
-        bestDay,
-      },
+      forecast: dailyForecast, // 🔥 สำคัญ
     });
-  } catch {
+
+  } catch (error) {
+    console.error("Weather API error:", error);
+
     return NextResponse.json(
-      { message: "Internal Error" },
+      { message: "Internal Server Error" },
       { status: 500 }
     );
   }

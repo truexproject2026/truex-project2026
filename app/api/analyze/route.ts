@@ -1,11 +1,33 @@
-import { HfInference } from "@huggingface/inference";
+import { InferenceClient } from "@huggingface/inference";
 import { NextResponse } from "next/server";
 
-const hf = new HfInference(process.env.HF_TOKEN);
+export const runtime = "nodejs";
+
+const hfToken = process.env.HF_TOKEN;
+
+if (!hfToken) {
+  console.error("HF_TOKEN is missing");
+}
+
+const hf = hfToken ? new InferenceClient(hfToken) : null;
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    if (!hf) {
+      return NextResponse.json(
+        { analysis: "AI service not configured (missing HF_TOKEN)" },
+        { status: 500 }
+      );
+    }
+
+    const body = await req.json().catch(() => null);
+
+    if (!body || typeof body !== "object") {
+      return NextResponse.json(
+        { analysis: "Invalid request body" },
+        { status: 400 }
+      );
+    }
 
     const {
       aqi = 0,
@@ -18,54 +40,58 @@ export async function POST(req: Request) {
       trend = {},
     } = body;
 
-    let riskScore = 0;
-    let riskLevel = "ต่ำ";
-    let riskReason = "";
-
-    // AQI
-    if (aqi > 150) {
-      riskScore += 40;
-      riskReason += "ค่าฝุ่นอันตราย ";
-    } else if (aqi > 100) {
-      riskScore += 25;
-      riskReason += "ค่าฝุ่นเริ่มกระทบสุขภาพ ";
-    }
-
-    // ฝน
-    if (desc.toLowerCase().includes("rain") || desc.includes("ฝน")) {
-      riskScore += 20;
-      riskReason += "มีฝน ถนนลื่น ";
-    }
-
-    // อุณหภูมิ
-    if (temp > 37) {
-      riskScore += 15;
-      riskReason += "อุณหภูมิสูง ";
-    }
-
-    // สรุประดับความเสี่ยง
-    if (riskScore > 70) riskLevel = "สูง";
-    else if (riskScore > 40) riskLevel = "ปานกลาง";
-    else riskLevel = "ต่ำ";
-
     /* =========================
-       📅 Forecast Summary
+       Risk Calculation
     ========================== */
 
-    const forecastText = forecast.length
-      ? forecast
-          .map(
-            (d: any) =>
-              `${d.date} ${d.temp}°C ฝน ${d.rain}%`
-          )
-          .join("\n")
-      : "ไม่มีข้อมูลแนวโน้ม";
+    let riskScore = 0;
+    let riskReason: string[] = [];
+
+    if (aqi > 150) {
+      riskScore += 40;
+      riskReason.push("ค่าฝุ่นอันตราย");
+    } else if (aqi > 100) {
+      riskScore += 25;
+      riskReason.push("ค่าฝุ่นเริ่มกระทบสุขภาพ");
+    }
+
+    if (
+      desc?.toLowerCase().includes("rain") ||
+      desc?.includes("ฝน")
+    ) {
+      riskScore += 20;
+      riskReason.push("มีฝน ถนนลื่น");
+    }
+
+    if (temp > 37) {
+      riskScore += 15;
+      riskReason.push("อุณหภูมิสูง");
+    }
+
+    let riskLevel: "ต่ำ" | "ปานกลาง" | "สูง" = "ต่ำ";
+
+    if (riskScore > 70) riskLevel = "สูง";
+    else if (riskScore > 40) riskLevel = "ปานกลาง";
+
+    /* =========================
+       Forecast Summary
+    ========================== */
+
+    const forecastText =
+      Array.isArray(forecast) && forecast.length
+        ? forecast
+            .map(
+              (d: any) =>
+                `${d.date ?? "-"} ${d.temp ?? "-"}°C ฝน ${d.rain ?? 0}%`
+            )
+            .join("\n")
+        : "ไม่มีข้อมูลแนวโน้ม";
 
     const hotDays = trend?.hotDays ?? 0;
     const rainDays = trend?.rainDays ?? 0;
 
     /* =========================
-       🧠 AI PROMPT
+       AI Prompt
     ========================== */
 
     const systemPrompt = `
@@ -77,7 +103,7 @@ export async function POST(req: Request) {
 สภาพอากาศ: ${desc}
 AQI: ${aqi}
 ระดับความเสี่ยง: ${riskLevel}
-สาเหตุ: ${riskReason || "ไม่มีความเสี่ยงเด่นชัด"}
+สาเหตุ: ${riskReason.length ? riskReason.join(", ") : "ไม่มีความเสี่ยงเด่นชัด"}
 นัดหมาย: '${nextEvent}'
 
 แนวโน้ม 5 วัน:
@@ -91,7 +117,6 @@ ${forecastText}
 - ตอบสั้น ไม่เกิน 3 ประโยค
 - ห้ามเกริ่นนำ
 - วิเคราะห์จากข้อมูลทั้งหมด
-- ถามเรื่องสัปดาห์ให้ใช้ trend
 - ให้คำแนะนำที่ใช้ได้จริง
 - ปิดท้ายด้วยระดับความเสี่ยง (ต่ำ / ปานกลาง / สูง)
 `;
@@ -108,17 +133,29 @@ ${forecastText}
     }
 
     const response = await hf.chatCompletion({
-      model: "mistralai/Mistral-7B-Instruct-v0.2",
+      model: "meta-llama/Meta-Llama-3-8B-Instruct",
       messages,
-      max_tokens: 150,
-      temperature: 0.3,
+      max_tokens: 180,
+      temperature: 0.2,
     });
 
-    let result = response.choices[0].message.content || "";
-    result = result.trim().replace(/\*/g, "").replace(/#/g, "");
+    const aiText =
+      response?.choices?.[0]?.message?.content ?? "";
+
+    if (!aiText) {
+      return NextResponse.json(
+        { analysis: "AI ไม่สามารถสร้างคำตอบได้" },
+        { status: 500 }
+      );
+    }
+
+    const cleaned = aiText
+      .trim()
+      .replace(/\*/g, "")
+      .replace(/#/g, "");
 
     return NextResponse.json({
-      analysis: result,
+      analysis: cleaned,
       meta: {
         riskLevel,
         riskReason,
@@ -129,8 +166,12 @@ ${forecastText}
   } catch (error) {
     console.error("AI API Error:", error);
 
-    return NextResponse.json({
-      analysis: "ระบบวิเคราะห์ขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง",
-    });
+    return NextResponse.json(
+      {
+        analysis:
+          "ระบบวิเคราะห์ขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง",
+      },
+      { status: 500 }
+    );
   }
 }

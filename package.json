@@ -9,7 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@huggingface/inference": "^4.13.11",
+    "@huggingface/inference": "^4.13.13",
     "@supabase/supabase-js": "^2.95.3",
     "bcryptjs": "^3.0.3",
     "googleapis": "^171.4.0",
