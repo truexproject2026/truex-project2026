@@ -108,7 +108,7 @@ ${forecastText}
     }
 
     const response = await hf.chatCompletion({
-      model: "meta-llama/Meta-Llama-3-8B-Instruct",
+      model: "mistralai/Mistral-7B-Instruct-v0.2",
       messages,
       max_tokens: 150,
       temperature: 0.3,
