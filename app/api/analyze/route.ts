@@ -1,54 +1,136 @@
-export const runtime = 'edge';
 import { HfInference } from "@huggingface/inference";
 import { NextResponse } from "next/server";
 
 const hf = new HfInference(process.env.HF_TOKEN);
 
 export async function POST(req: Request) {
-  let currentTemp = "--";
-  let currentAqi = 0;
-  let currentDesc = "";
-  let currentEvent = "ไม่มีนัดหมาย";
-
   try {
-    const { aqi, temp, desc, nextEvent } = await req.json();
-    currentTemp = temp;
-    currentAqi = aqi;
-    currentDesc = desc;
-    currentEvent = nextEvent || "ไม่มีนัดหมาย";
+    const body = await req.json();
 
-    // ปรับ Prompt ให้มีตัวอย่างและกฎที่เข้มงวดขึ้น
+    const {
+      aqi = 0,
+      temp = 0,
+      desc = "ไม่ทราบสภาพอากาศ",
+      nextEvent = "ไม่มีนัดหมาย",
+      question = null,
+      city = "พื้นที่ของคุณ",
+      forecast = [],
+      trend = {},
+    } = body;
+
+    let riskScore = 0;
+    let riskLevel = "ต่ำ";
+    let riskReason = "";
+
+    // AQI
+    if (aqi > 150) {
+      riskScore += 40;
+      riskReason += "ค่าฝุ่นอันตราย ";
+    } else if (aqi > 100) {
+      riskScore += 25;
+      riskReason += "ค่าฝุ่นเริ่มกระทบสุขภาพ ";
+    }
+
+    // ฝน
+    if (desc.toLowerCase().includes("rain") || desc.includes("ฝน")) {
+      riskScore += 20;
+      riskReason += "มีฝน ถนนลื่น ";
+    }
+
+    // อุณหภูมิ
+    if (temp > 37) {
+      riskScore += 15;
+      riskReason += "อุณหภูมิสูง ";
+    }
+
+    // สรุประดับความเสี่ยง
+    if (riskScore > 70) riskLevel = "สูง";
+    else if (riskScore > 40) riskLevel = "ปานกลาง";
+    else riskLevel = "ต่ำ";
+
+    /* =========================
+       📅 Forecast Summary
+    ========================== */
+
+    const forecastText = forecast.length
+      ? forecast
+          .map(
+            (d: any) =>
+              `${d.date} ${d.temp}°C ฝน ${d.rain}%`
+          )
+          .join("\n")
+      : "ไม่มีข้อมูลแนวโน้ม";
+
+    const hotDays = trend?.hotDays ?? 0;
+    const rainDays = trend?.rainDays ?? 0;
+
+    /* =========================
+       🧠 AI PROMPT
+    ========================== */
+
     const systemPrompt = `
-      คุณคือ TrueX AI ผู้ช่วยวิเคราะห์สภาพอากาศและตารางงานอัจฉริยะ
-      ข้อมูลปัจจุบัน: อุณหภูมิ ${temp}°C, สภาพอากาศ ${desc}, AQI ${aqi}, นัดหมายคือ '${currentEvent}'
+คุณคือ TrueX AI ระบบช่วยตัดสินใจอัจฉริยะ
 
-      กฎเหล็ก: ตอบตามแพทเทิร์นนี้ "เป๊ะๆ" ห้ามมีส่วนนำ ห้ามเกริ่น และห้ามใช้เครื่องหมายดอกจัน (*):
-      "วันนี้อุณหภูมิ [อุณหภูมิ] องศาเซลเซียส สภาพอากาศ[คำแปลสภาพอากาศเป็นไทย] ค่าฝุ่น AQI อยู่ที่ [AQI] [แนะนำสั้นๆ] โดยเฉพาะเมื่อคุณมีนัด '[ชื่อนัดหมาย]' [คำแนะนำการเตรียมตัว]"
+ข้อมูลวันนี้:
+เมือง: ${city}
+อุณหภูมิ: ${temp}°C
+สภาพอากาศ: ${desc}
+AQI: ${aqi}
+ระดับความเสี่ยง: ${riskLevel}
+สาเหตุ: ${riskReason || "ไม่มีความเสี่ยงเด่นชัด"}
+นัดหมาย: '${nextEvent}'
 
-      ตัวอย่างคำตอบที่ถูกต้อง:
-      "วันนี้อุณหภูมิ 34 องศาเซลเซียส สภาพอากาศท้องฟ้าแจ่มใส ค่าฝุ่น AQI อยู่ที่ 84 ควรระวังเรื่องแดดจัดเล็กน้อย โดยเฉพาะเมื่อคุณมีนัด 'ไปหาหมอตอน 19:00 น' คุณอาจต้องการพกร่มกับตนเองเพื่อความสะดวกในการเดินทาง"
+แนวโน้ม 5 วัน:
+${forecastText}
 
-      *ตอบเป็นภาษาไทยเท่านั้น และเข้าแพทเทิร์นทันที*
-    `;
+สถิติแนวโน้ม:
+วันร้อนจัด (>35°C): ${hotDays} วัน
+วันฝนตกหนัก (>50%): ${rainDays} วัน
+
+กฎการตอบ:
+- ตอบสั้น ไม่เกิน 3 ประโยค
+- ห้ามเกริ่นนำ
+- วิเคราะห์จากข้อมูลทั้งหมด
+- ถามเรื่องสัปดาห์ให้ใช้ trend
+- ให้คำแนะนำที่ใช้ได้จริง
+- ปิดท้ายด้วยระดับความเสี่ยง (ต่ำ / ปานกลาง / สูง)
+`;
+
+    const messages: any[] = [
+      { role: "system", content: systemPrompt },
+    ];
+
+    if (question) {
+      messages.push({
+        role: "user",
+        content: question,
+      });
+    }
 
     const response = await hf.chatCompletion({
       model: "meta-llama/Meta-Llama-3-8B-Instruct",
-      messages: [{ role: "system", content: systemPrompt }],
-      max_tokens: 200,
-      temperature: 0.1, // ลดค่าความเพี้ยนเพื่อให้ตอบตรงแพทเทิร์นที่สุด
+      messages,
+      max_tokens: 150,
+      temperature: 0.3,
     });
 
     let result = response.choices[0].message.content || "";
-    
-    // ลบเครื่องหมายพิเศษที่อาจทำให้ระบบอ่านเสียงสะดุดออก
-    result = result.trim().replace(/\*/g, '').replace(/#/g, '');
+    result = result.trim().replace(/\*/g, "").replace(/#/g, "");
 
-    return NextResponse.json({ analysis: result });
+    return NextResponse.json({
+      analysis: result,
+      meta: {
+        riskLevel,
+        riskReason,
+        riskScore,
+      },
+    });
 
   } catch (error) {
     console.error("AI API Error:", error);
-    return NextResponse.json({ 
-      analysis: `วันนี้อุณหภูมิ ${currentTemp} องศาเซลเซียส สภาพอากาศ ${currentDesc} และค่า AQI อยู่ที่ ${currentAqi} อย่าลืมเตรียมตัวสำหรับนัด '${currentEvent}' และดูแลสุขภาพด้วยนะครับ` 
+
+    return NextResponse.json({
+      analysis: "ระบบวิเคราะห์ขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง",
     });
   }
 }
