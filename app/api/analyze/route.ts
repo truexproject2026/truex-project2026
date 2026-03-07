@@ -2,8 +2,6 @@ export const runtime = "nodejs";
 import { InferenceClient } from "@huggingface/inference";
 import { NextResponse } from "next/server";
 
-
-
 const hfToken = process.env.HF_TOKEN;
 
 if (!hfToken) {
@@ -14,6 +12,7 @@ const hf = hfToken ? new InferenceClient(hfToken) : null;
 
 export async function POST(req: Request) {
   try {
+
     if (!hf) {
       return NextResponse.json(
         { analysis: "AI service not configured (missing HF_TOKEN)" },
@@ -32,6 +31,7 @@ export async function POST(req: Request) {
 
     const {
       aqi = 0,
+      pm25 = 0,
       temp = 0,
       desc = "ไม่ทราบสภาพอากาศ",
       nextEvent = "ไม่มีนัดหมาย",
@@ -42,6 +42,47 @@ export async function POST(req: Request) {
     } = body;
 
     /* =========================
+       VOICE COMMAND DETECTION
+    ========================== */
+
+    if (question) {
+
+      const q = question.toLowerCase();
+
+      if (
+        q.includes("เปิดเครื่องกรอง") ||
+        q.includes("เปิดเครื่องฟอก")
+      ) {
+        return NextResponse.json({
+          action: "PURIFIER_ON",
+          analysis: "เปิดเครื่องกรองอากาศให้แล้วครับ",
+        });
+      }
+
+      if (
+        q.includes("ปิดเครื่องกรอง") ||
+        q.includes("ปิดเครื่องฟอก")
+      ) {
+        return NextResponse.json({
+          action: "PURIFIER_OFF",
+          analysis: "ปิดเครื่องกรองอากาศเรียบร้อยแล้วครับ",
+        });
+      }
+
+      if (
+        q.includes("สถานะเครื่องฟอก") ||
+        q.includes("เครื่องฟอกทำงานไหม")
+      ) {
+        return NextResponse.json({
+          analysis:
+            pm25 > 50
+              ? "ตอนนี้ฝุ่นค่อนข้างสูง แนะนำให้เปิดเครื่องฟอกอากาศ"
+              : "ตอนนี้อากาศยังดี เครื่องฟอกอาจยังไม่จำเป็น",
+        });
+      }
+    }
+
+    /* =========================
        Risk Calculation
     ========================== */
 
@@ -50,10 +91,21 @@ export async function POST(req: Request) {
 
     if (aqi > 150) {
       riskScore += 40;
-      riskReason.push("ค่าฝุ่นอันตราย");
+      riskReason.push("ค่าฝุ่น AQI อันตราย");
     } else if (aqi > 100) {
       riskScore += 25;
-      riskReason.push("ค่าฝุ่นเริ่มกระทบสุขภาพ");
+      riskReason.push("AQI เริ่มกระทบสุขภาพ");
+    }
+
+    if (pm25 > 120) {
+      riskScore += 40;
+      riskReason.push("PM2.5 อันตรายมาก");
+    } else if (pm25 > 75) {
+      riskScore += 25;
+      riskReason.push("PM2.5 สูง");
+    } else if (pm25 > 50) {
+      riskScore += 15;
+      riskReason.push("PM2.5 เริ่มกระทบสุขภาพ");
     }
 
     if (
@@ -92,7 +144,7 @@ export async function POST(req: Request) {
     const rainDays = trend?.rainDays ?? 0;
 
     /* =========================
-       AI Prompt
+       AI PROMPT
     ========================== */
 
     const systemPrompt = `
@@ -103,6 +155,7 @@ export async function POST(req: Request) {
 อุณหภูมิ: ${temp}°C
 สภาพอากาศ: ${desc}
 AQI: ${aqi}
+PM2.5: ${pm25}
 ระดับความเสี่ยง: ${riskLevel}
 สาเหตุ: ${riskReason.length ? riskReason.join(", ") : "ไม่มีความเสี่ยงเด่นชัด"}
 นัดหมาย: '${nextEvent}'
@@ -119,6 +172,7 @@ ${forecastText}
 - ห้ามเกริ่นนำ
 - วิเคราะห์จากข้อมูลทั้งหมด
 - ให้คำแนะนำที่ใช้ได้จริง
+- หาก PM2.5 สูง ให้แนะนำเปิดเครื่องฟอกอากาศ
 - ปิดท้ายด้วยระดับความเสี่ยง (ต่ำ / ปานกลาง / สูง)
 `;
 
@@ -165,6 +219,7 @@ ${forecastText}
     });
 
   } catch (error) {
+
     console.error("AI API Error:", error);
 
     return NextResponse.json(

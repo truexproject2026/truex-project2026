@@ -1,6 +1,14 @@
 export const runtime = "edge";
 import { NextResponse } from "next/server";
 
+function calculateAQI(pm: number) {
+  if (pm <= 12) return (50 / 12) * pm;
+  if (pm <= 35.4) return ((100 - 51) / (35.4 - 12.1)) * (pm - 12.1) + 51;
+  if (pm <= 55.4) return ((150 - 101) / (55.4 - 35.5)) * (pm - 35.5) + 101;
+  if (pm <= 150.4) return ((200 - 151) / (150.4 - 55.5)) * (pm - 55.5) + 151;
+  return 300;
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -25,6 +33,7 @@ export async function GET(req: Request) {
     }
 
     const apiKey = process.env.OPENWEATHER_API_KEY;
+
     if (!apiKey) {
       return NextResponse.json(
         { message: "API key missing" },
@@ -60,7 +69,12 @@ export async function GET(req: Request) {
       ),
     ]);
 
-    if (!weatherRes.ok || !pollutionRes.ok || !forecastRes.ok) {
+    if (
+      !weatherRes.ok ||
+      !pollutionRes.ok ||
+      !pollutionForecastRes.ok ||
+      !forecastRes.ok
+    ) {
       return NextResponse.json(
         { message: "Weather service unavailable" },
         { status: 502 }
@@ -79,7 +93,7 @@ export async function GET(req: Request) {
 
     const isRangsit =
       latitude >= 13.98 &&
-      latitude <= 14.10 &&
+      latitude <= 14.1 &&
       longitude >= 100.48 &&
       longitude <= 100.65;
 
@@ -87,14 +101,14 @@ export async function GET(req: Request) {
 
     if (isRangsit) {
       areaName = "รังสิต, คลองหลวง";
-    } else {
+    } else if (geoData?.length) {
       const district =
-        geoData?.find((g: any) => g.local_names?.th)?.local_names?.th ||
-        geoData?.[0]?.name ||
+        geoData.find((g: any) => g.local_names?.th)?.local_names?.th ||
+        geoData[0]?.name ||
         null;
 
       const province =
-        geoData?.[0]?.state ||
+        geoData[0]?.state ||
         wData?.name ||
         null;
 
@@ -109,19 +123,6 @@ export async function GET(req: Request) {
     ========================== */
 
     const pm25 = pData?.list?.[0]?.components?.pm2_5 ?? 0;
-
-    function calculateAQI(pm: number) {
-      if (pm <= 12)
-        return (50 / 12) * pm;
-      if (pm <= 35.4)
-        return ((100 - 51) / (35.4 - 12.1)) * (pm - 12.1) + 51;
-      if (pm <= 55.4)
-        return ((150 - 101) / (55.4 - 35.5)) * (pm - 35.5) + 101;
-      if (pm <= 150.4)
-        return ((200 - 151) / (150.4 - 55.5)) * (pm - 55.5) + 151;
-      return 300;
-    }
-
     const displayAqi = Math.round(calculateAQI(pm25));
 
     /* =========================
@@ -143,16 +144,12 @@ export async function GET(req: Request) {
 
     const dailyForecast =
       forecastData?.list
-        ?.filter((item: any) =>
-          item.dt_txt.includes("12:00:00")
-        )
+        ?.filter((item: any) => item.dt_txt.includes("12:00:00"))
         ?.slice(0, 5)
         ?.map((item: any) => ({
           date: item.dt_txt.split(" ")[0],
           temp: Math.round(item.main.temp),
-          rain: item.pop
-            ? Math.round(item.pop * 100)
-            : 0,
+          rain: item.pop ? Math.round(item.pop * 100) : 0,
         })) || [];
 
     /* =========================
@@ -166,7 +163,7 @@ export async function GET(req: Request) {
       aqi: displayAqi,
       pm25,
       aqiHourly,
-      forecast: dailyForecast, // 🔥 สำคัญ
+      forecast: dailyForecast,
     });
 
   } catch (error) {
